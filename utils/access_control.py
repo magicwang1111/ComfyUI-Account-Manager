@@ -4,6 +4,7 @@ import heapq
 import copy
 import contextvars
 import mimetypes
+from datetime import datetime
 from aiohttp import web
 from typing import Optional
 
@@ -72,36 +73,86 @@ class AccessControl:
             return True
         return bool(owner_id and owner_id == current_user_id)
 
+    def _get_user_slug(self, user_id: str = None) -> str:
+        user_id = user_id or self.get_current_user_id()
+        if not user_id:
+            return "public"
+
+        _, user = self.users_db.get_user(user_id=user_id)
+        return user.get("username") or user_id
+
+    @staticmethod
+    def _get_timeline_slug() -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _get_user_path_prefix(self, user_id: str = None) -> str:
+        """Build the user-visible folder prefix for newly generated files."""
+        user_id = user_id or self.get_current_user_id()
+        return f"{self._get_timeline_slug()}/{self._get_user_slug(user_id)}"
+
+    def _is_current_user_prefix(self, path_prefix: str, user_id: str = None) -> bool:
+        user_id = user_id or self.get_current_user_id()
+        if not user_id or not path_prefix:
+            return False
+
+        normalized = os.path.normpath(str(path_prefix)).replace("\\", "/").strip("/")
+        current_prefix = self._get_user_path_prefix(user_id)
+        if normalized == current_prefix or normalized.startswith(f"{current_prefix}/"):
+            return True
+
+        # Backward compatibility for files generated before the timeline/username layout.
+        return normalized == user_id or normalized.startswith(f"{user_id}/")
+
+    def _can_access_output_subfolder(
+        self, subfolder: str, current_user_id: str = None
+    ) -> bool:
+        current_user_id = current_user_id or self.get_current_user_id()
+        if self.is_admin_user(current_user_id):
+            return True
+        if not current_user_id:
+            return False
+
+        normalized = os.path.normpath(str(subfolder or "")).replace("\\", "/").strip("/")
+        if not normalized:
+            return False
+
+        if normalized == current_user_id or normalized.startswith(f"{current_user_id}/"):
+            return True
+
+        username = self._get_user_slug(current_user_id)
+        parts = normalized.split("/")
+        return len(parts) >= 2 and parts[1] == username
+
     def _with_user_prefix(self, filename_prefix: str) -> str:
         user_id = self.get_current_user_id()
         if not user_id or not filename_prefix:
             return filename_prefix
 
         normalized = os.path.normpath(str(filename_prefix)).replace("\\", "/")
-        if normalized == user_id or normalized.startswith(f"{user_id}/"):
+        if self._is_current_user_prefix(normalized, user_id):
             return filename_prefix
 
-        return f"{user_id}/{filename_prefix}"
+        return f"{self._get_user_path_prefix(user_id)}/{filename_prefix}"
 
     def get_user_output_directory(self) -> str:
         """Get the user-specific output directory."""
         return os.path.join(
             self.__get_output_directory(),
-            self.get_current_user_id() or "public",
+            *self._get_user_path_prefix().split("/"),
         )
 
     def get_user_temp_directory(self) -> str:
         """Get the user-specific temp directory."""
         return os.path.join(
             self.__get_temp_directory(),
-            self.get_current_user_id() or "public",
+            self._get_user_slug(),
         )
 
     def get_user_input_directory(self) -> str:
         """Get the user-specific input directory."""
         input_directory = os.path.join(
             self.__get_input_directory(),
-            self.get_current_user_id() or "public",
+            self._get_user_slug(),
         )
 
         os.makedirs(input_directory, exist_ok=True)
@@ -193,10 +244,9 @@ class AccessControl:
             if self.is_admin_user(user_id):
                 return await handler(request)
 
-            subfolder = request.rel_url.query.get("subfolder", "")
-            owner_id = os.path.normpath(subfolder).replace("\\", "/").split("/", 1)[0]
-
-            if owner_id and owner_id == user_id:
+            if self._can_access_output_subfolder(
+                request.rel_url.query.get("subfolder", ""), user_id
+            ):
                 return await handler(request)
 
             return web.HTTPForbidden(reason="You do not have access to this output.")
