@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-account-manager"
+description = "ComfyUI extension for account login, multi-user registration, and per-account asset isolation."
+version = "3.0.0"
+license = {file = "LICENSE"}
+dependencies = ["aiohttp", "PyJWT", "bcrypt", "bleach"]
+
+[project.urls]
+Repository = "https://github.com/magicwang1111/ComfyUI-Account-Manager"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "magicwang1111"
+DisplayName = "ComfyUI-Account-Manager"
+Icon = "https://raw.githubusercontent.com/magicwang1111/ComfyUI-Account-Manager/refs/heads/main/icon.png"

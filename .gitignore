@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.log
+users_db.json
+whitelist.txt
+blacklist.txt
+.env
