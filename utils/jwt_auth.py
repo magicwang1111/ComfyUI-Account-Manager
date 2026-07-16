@@ -14,7 +14,7 @@ class JWTAuth:
         access_control: AccessControl,
         logger: Logger,
         secret_key: str,
-        expire_minutes: int = 12 * 60,
+        expire_minutes: int = 365 * 24 * 60,
         algorithm: str = "HS256",
     ):
         self.users_db = users_db

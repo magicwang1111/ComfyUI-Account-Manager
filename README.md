@@ -29,8 +29,9 @@ Edit `config.json` before starting ComfyUI.
 ```json
 {
   "secret_key_env": "SECRET_KEY",
+  "secret_key_file": "secret_key.txt",
   "users_db": "users_db.json",
-  "access_token_expiration_hours": 12,
+  "access_token_expiration_hours": 8760,
   "max_access_token_expiration_hours": 8760,
   "log": "account_manager.log",
   "log_levels": ["INFO"],

@@ -137,7 +137,12 @@ async def post_login(request: web.Request) -> web.Response:
         )
         secure_flag = request.headers.get("X-Forwarded-Proto", "http") == "https"
         response.set_cookie(
-            "jwt_token", token, httponly=True, secure=secure_flag, samesite="Strict"
+            "jwt_token",
+            token,
+            max_age=TOKEN_EXPIRE_MINUTES * 60,
+            httponly=True,
+            secure=secure_flag,
+            samesite="Strict",
         )
         logger.login_success(ip, username)
         return response
@@ -204,7 +209,12 @@ async def post_generate_token(request: web.Request) -> web.Response:
         )
         secure_flag = request.headers.get("X-Forwarded-Proto", "http") == "https"
         response.set_cookie(
-            "jwt_token", token, httponly=True, secure=secure_flag, samesite="Strict"
+            "jwt_token",
+            token,
+            max_age=expire_hours * 60 * 60,
+            httponly=True,
+            secure=secure_flag,
+            samesite="Strict",
         )
         
         logger.generate_success(ip, username, expire_hours)

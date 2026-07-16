@@ -5,3 +5,4 @@ users_db.json
 whitelist.txt
 blacklist.txt
 .env
+secret_key.txt

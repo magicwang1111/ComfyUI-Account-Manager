@@ -21,18 +21,24 @@ def load_config(file_path: str) -> Dict[str, Any]:
 config = load_config(CONFIG_FILE)
 
 SECRET_KEY = os.getenv(config.get("secret_key_env", "SECRET_KEY"))
+SECRET_KEY_FILE = os.path.join(EXT_PATH, config.get("secret_key_file", "secret_key.txt"))
 
 if not SECRET_KEY:
-    warnings.warn(
-        "The SECRET_KEY environment variable is not set. A random key will be used for this session. "
-        "This will cause all users to log out on server restart."
-    )
-    SECRET_KEY = "".join([str(uuid.uuid4().hex) for _ in range(128)])
+    if os.path.exists(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE, "r", encoding="utf-8") as f:
+            SECRET_KEY = f.read().strip()
+    else:
+        warnings.warn(
+            "The SECRET_KEY environment variable is not set. A persistent key will be created in secret_key.txt."
+        )
+        SECRET_KEY = "".join([str(uuid.uuid4().hex) for _ in range(128)])
+        with open(SECRET_KEY_FILE, "w", encoding="utf-8") as f:
+            f.write(SECRET_KEY)
 
 MATCH_HEADERS = {"X-Forwarded-Proto": "https"}
 
 TOKEN_ALGORITHM = "HS256"
-TOKEN_EXPIRE_MINUTES = 60 * config.get("access_token_expiration_hours", 12)
+TOKEN_EXPIRE_MINUTES = 60 * config.get("access_token_expiration_hours", 8760)
 MAX_TOKEN_EXPIRE_MINUTES = 60 * config.get("max_access_token_expiration_hours", 8760)
 
 USERS_FILE = os.path.join(EXT_PATH, config.get("users_db", "users_db.json"))
