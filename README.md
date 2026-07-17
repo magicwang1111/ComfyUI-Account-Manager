@@ -52,6 +52,8 @@ Completed generation history is persisted in `history.sqlite3` and restored when
 
 Temporary preview images, videos, and audio referenced by completed history are linked into the user's persistent output folder and registered in ComfyUI's asset database before the history entry is saved. This keeps Job Queue previews and Media Assets available after refreshes and restarts.
 
+When another custom node uses an external temp directory, Account Manager resolves the exact source path from the authenticated asset reference instead of assuming ComfyUI's default temp root.
+
 ComfyUI's optional Assets panel is separate from queue history and requires starting ComfyUI with `--enable-assets`.
 
 ## API Access

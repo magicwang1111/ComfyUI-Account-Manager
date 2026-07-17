@@ -14,7 +14,7 @@ from server import PromptServer
 from execution import PromptQueue, MAXIMUM_HISTORY_SIZE
 
 from .users_db import UsersDB
-from .history_assets import persist_temp_assets
+from .history_assets import iter_temp_references, persist_temp_assets
 from .history_store import HistoryStore
 
 
@@ -392,28 +392,78 @@ class AccessControl:
             destination_subfolder = (
                 f"{self._get_user_path_prefix(user_id)}/history_assets/{prompt_id}"
             )
-            persisted_paths = persist_temp_assets(
+            source_paths = self._get_registered_temp_paths(
+                self.__prompt_queue.history[prompt_id], user_id
+            )
+            persisted_assets = persist_temp_assets(
                 self.__prompt_queue.history[prompt_id],
                 self.__get_temp_directory(),
                 self.__get_output_directory(),
                 self._get_user_slug(user_id),
                 destination_subfolder,
+                source_paths,
             )
-            if persisted_paths:
-                self._register_history_assets(persisted_paths, prompt_id, user_id)
+            if persisted_assets:
+                self._register_history_assets(persisted_assets, prompt_id, user_id)
         except Exception:
             logger.exception("Failed to persist temporary assets for %s", prompt_id)
 
     @staticmethod
-    def _register_history_assets(paths: list[str], prompt_id: str, user_id: str) -> None:
+    def _get_registered_temp_paths(history_item: dict, user_id: str) -> dict[str, str]:
         try:
+            from app.assets.database.queries.asset_reference import get_reference_by_id
+            from app.database.db import create_session
+        except Exception:
+            return {}
+
+        paths = {}
+        with create_session() as session:
+            for reference in iter_temp_references(history_item):
+                reference_id = str(reference.get("id") or "")
+                if not reference_id:
+                    continue
+                asset_reference = get_reference_by_id(
+                    session, reference_id=reference_id
+                )
+                if (
+                    asset_reference
+                    and asset_reference.deleted_at is None
+                    and asset_reference.owner_id == user_id
+                    and asset_reference.file_path
+                ):
+                    paths[reference_id] = asset_reference.file_path
+        return paths
+
+    @staticmethod
+    def _register_history_assets(
+        persisted_assets: list[tuple[dict, str]], prompt_id: str, user_id: str
+    ) -> None:
+        try:
+            from app.assets.database.queries.asset_reference import (
+                get_reference_by_file_path,
+            )
+            from app.assets.services.asset_management import delete_asset_reference
             from app.assets.services.ingest import ingest_existing_file
+            from app.database.db import create_session
         except Exception:
             return
 
-        for path in paths:
+        for reference, path in persisted_assets:
             try:
+                old_reference_id = str(reference.get("id") or "")
                 ingest_existing_file(path, owner_id=user_id, job_id=prompt_id)
+                with create_session() as session:
+                    new_reference = get_reference_by_file_path(session, path)
+                    if not new_reference or new_reference.owner_id != user_id:
+                        continue
+                    reference["id"] = new_reference.id
+
+                if old_reference_id and old_reference_id != reference["id"]:
+                    delete_asset_reference(
+                        old_reference_id,
+                        owner_id=user_id,
+                        delete_content_if_orphan=False,
+                    )
             except Exception:
                 logger.exception("Failed to register persistent history asset %s", path)
 

@@ -10,15 +10,15 @@ def _path_parts(path: str):
     return parts
 
 
-def _iter_temp_references(value):
+def iter_temp_references(value):
     if isinstance(value, dict):
         if value.get("type") == "temp" and value.get("filename"):
             yield value
         for nested in value.values():
-            yield from _iter_temp_references(nested)
+            yield from iter_temp_references(nested)
     elif isinstance(value, list):
         for nested in value:
-            yield from _iter_temp_references(nested)
+            yield from iter_temp_references(nested)
 
 
 def persist_temp_assets(
@@ -27,7 +27,8 @@ def persist_temp_assets(
     output_root: str,
     owner_slug: str,
     destination_subfolder: str,
-) -> list[str]:
+    source_paths_by_id: dict[str, str] = None,
+) -> list[tuple[dict, str]]:
     """Persist history-only temp references onto durable output paths."""
     owner_parts = _path_parts(owner_slug)
     destination_parts = _path_parts(destination_subfolder)
@@ -36,9 +37,10 @@ def persist_temp_assets(
 
     owner_slug = owner_parts[0]
     destination_dir = os.path.join(output_root, *destination_parts)
-    persisted_paths = []
+    source_paths_by_id = source_paths_by_id or {}
+    persisted_assets = []
 
-    for reference in _iter_temp_references(history_item):
+    for reference in iter_temp_references(history_item):
         filename = str(reference.get("filename") or "")
         if not filename or filename != os.path.basename(filename):
             continue
@@ -51,13 +53,19 @@ def persist_temp_assets(
         if os.path.isfile(destination):
             reference["type"] = "output"
             reference["subfolder"] = "/".join(destination_parts)
-            persisted_paths.append(destination)
+            persisted_assets.append((reference, destination))
             continue
 
         owned_subfolder = (
             subfolder_parts[0] == owner_slug
             or (len(subfolder_parts) >= 2 and subfolder_parts[1] == owner_slug)
         )
+        source_candidates = []
+        reference_id = str(reference.get("id") or "")
+        registered_source = source_paths_by_id.get(reference_id)
+        if registered_source:
+            source_candidates.append(registered_source)
+
         source_roots = [os.path.join(temp_root, owner_slug)]
         if owned_subfolder:
             source_roots.extend([os.path.join(temp_root, "public"), temp_root])
@@ -68,7 +76,6 @@ def persist_temp_assets(
                     if entry.is_dir(follow_symlinks=False)
                 )
 
-        source_candidates = []
         for source_root in source_roots:
             candidate = os.path.join(source_root, *subfolder_parts, filename)
             if candidate not in source_candidates:
@@ -89,6 +96,6 @@ def persist_temp_assets(
 
         reference["type"] = "output"
         reference["subfolder"] = "/".join(destination_parts)
-        persisted_paths.append(destination)
+        persisted_assets.append((reference, destination))
 
-    return persisted_paths
+    return persisted_assets

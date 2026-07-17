@@ -13,6 +13,10 @@ spec.loader.exec_module(history_assets)
 persist_temp_assets = history_assets.persist_temp_assets
 
 
+def persisted_paths(persisted_assets):
+    return [path for _, path in persisted_assets]
+
+
 class HistoryAssetsTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -52,7 +56,7 @@ class HistoryAssetsTests(unittest.TestCase):
 
         reference = item["outputs"]["1"]["images"][0]
         destination = self.output_root / reference["subfolder"] / reference["filename"]
-        self.assertEqual([str(destination)], paths)
+        self.assertEqual([str(destination)], persisted_paths(paths))
         self.assertEqual("output", reference["type"])
         self.assertTrue(destination.is_file())
         self.assertEqual(b"preview-data", destination.read_bytes())
@@ -121,7 +125,7 @@ class HistoryAssetsTests(unittest.TestCase):
         )
 
         destination = self.output_root / reference["subfolder"] / "preview.png"
-        self.assertEqual([str(destination)], paths)
+        self.assertEqual([str(destination)], persisted_paths(paths))
         self.assertEqual("output", reference["type"])
         self.assertEqual(b"public-preview", destination.read_bytes())
 
@@ -145,9 +149,36 @@ class HistoryAssetsTests(unittest.TestCase):
         )
 
         destination = self.output_root / reference["subfolder"] / "preview.png"
-        self.assertEqual([str(destination)], paths)
+        self.assertEqual([str(destination)], persisted_paths(paths))
         self.assertEqual("output", reference["type"])
         self.assertEqual(b"cached-preview", destination.read_bytes())
+
+    def test_registered_external_temp_path_is_used(self):
+        external_dir = self.root / "latentsync-temp" / "2026-07-17" / "alice"
+        external_dir.mkdir(parents=True)
+        source = external_dir / "preview.png"
+        source.write_bytes(b"latentsync-preview")
+        reference = {
+            "id": "asset-reference-1",
+            "filename": "preview.png",
+            "subfolder": "2026-07-17/alice",
+            "type": "temp",
+        }
+        item = {"outputs": {"1": {"images": [reference]}}}
+
+        assets = persist_temp_assets(
+            item,
+            str(self.temp_root),
+            str(self.output_root),
+            "alice",
+            "2026-07-17/alice/history_assets/prompt-6",
+            {"asset-reference-1": str(source)},
+        )
+
+        destination = self.output_root / reference["subfolder"] / "preview.png"
+        self.assertEqual([str(destination)], persisted_paths(assets))
+        self.assertEqual("output", reference["type"])
+        self.assertEqual(b"latentsync-preview", destination.read_bytes())
 
 
 if __name__ == "__main__":
