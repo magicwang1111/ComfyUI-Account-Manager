@@ -42,6 +42,7 @@ TOKEN_EXPIRE_MINUTES = 60 * config.get("access_token_expiration_hours", 8760)
 MAX_TOKEN_EXPIRE_MINUTES = 60 * config.get("max_access_token_expiration_hours", 8760)
 
 USERS_FILE = os.path.join(EXT_PATH, config.get("users_db", "users_db.json"))
+HISTORY_FILE = os.path.join(EXT_PATH, config.get("history_db", "history.sqlite3"))
 LOG_FILE = os.path.join(EXT_PATH, config.get("log", "account_manager.log"))
 LOG_LEVELS = config.get("log_levels", ["INFO"])
 

@@ -16,7 +16,7 @@ sanitizer = Sanitizer()
 ip_filter = IPFilter(WHITELIST, BLACKLIST)
 timeout = Timeout(ip_filter, BLACKLIST_AFTER_ATTEMPTS)
 users_db = UsersDB(USERS_FILE)
-access_control = AccessControl(users_db, instance)
+access_control = AccessControl(users_db, instance, HISTORY_FILE)
 jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
 )

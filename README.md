@@ -31,6 +31,7 @@ Edit `config.json` before starting ComfyUI.
   "secret_key_env": "SECRET_KEY",
   "secret_key_file": "secret_key.txt",
   "users_db": "users_db.json",
+  "history_db": "history.sqlite3",
   "access_token_expiration_hours": 8760,
   "max_access_token_expiration_hours": 8760,
   "log": "account_manager.log",
@@ -46,6 +47,10 @@ Edit `config.json` before starting ComfyUI.
 ```
 
 `separate_users` enables account-specific inputs, outputs, queue history, and asset visibility. The older misspelled `seperate_users` key is still accepted for compatibility, but new installs should use `separate_users`.
+
+Completed generation history is persisted in `history.sqlite3` and restored when ComfyUI restarts. The history database keeps the same 10,000-item limit as ComfyUI's in-memory history.
+
+ComfyUI's optional Assets panel is separate from queue history and requires starting ComfyUI with `--enable-assets`.
 
 ## API Access
 

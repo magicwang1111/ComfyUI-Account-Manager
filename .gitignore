@@ -6,3 +6,4 @@ whitelist.txt
 blacklist.txt
 .env
 secret_key.txt
+history.sqlite3*

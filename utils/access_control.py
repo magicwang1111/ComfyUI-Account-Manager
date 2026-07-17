@@ -3,6 +3,7 @@ import sys
 import heapq
 import copy
 import contextvars
+import logging
 import mimetypes
 from datetime import datetime
 from aiohttp import web
@@ -13,10 +14,16 @@ from server import PromptServer
 from execution import PromptQueue, MAXIMUM_HISTORY_SIZE
 
 from .users_db import UsersDB
+from .history_store import HistoryStore
+
+
+logger = logging.getLogger("ComfyUI-Account-Manager")
 
 
 class AccessControl:
-    def __init__(self, users_db: UsersDB, server: PromptServer):
+    def __init__(
+        self, users_db: UsersDB, server: PromptServer, history_file: str = None
+    ):
         self.users_db = users_db
         self.server = server
 
@@ -29,6 +36,12 @@ class AccessControl:
         self.__get_save_image_path = folder_paths.get_save_image_path
 
         self.__prompt_queue = self.server.prompt_queue
+        self.__history_store = None
+        if history_file:
+            try:
+                self.__history_store = HistoryStore(history_file)
+            except Exception:
+                logger.exception("Failed to initialize persistent history")
         self.__prompt_queue_put = self.__prompt_queue.put
         self.__prompt_queue_get_flags = self.__prompt_queue.get_flags
         self.__user_manager_get_request_user_id = getattr(
@@ -350,7 +363,7 @@ class AccessControl:
             prompt = self._unwrap_queue_item(wrapped_prompt)
             user_id = self._queue_item_user_id(wrapped_prompt)
 
-            if len(self.__prompt_queue.history) > MAXIMUM_HISTORY_SIZE:
+            if len(self.__prompt_queue.history) >= MAXIMUM_HISTORY_SIZE:
                 self.__prompt_queue.history.pop(next(iter(self.__prompt_queue.history)))
 
             status_dict: Optional[dict] = None
@@ -367,7 +380,45 @@ class AccessControl:
                 "user_id": user_id,
             }
             self.__prompt_queue.history[prompt[1]].update(history_result)
+            self._save_history_item(prompt[1])
             self.server.queue_updated()
+
+    def _save_history_item(self, prompt_id: str) -> None:
+        if not self.__history_store:
+            return
+        try:
+            self.__history_store.save(
+                prompt_id,
+                self.__prompt_queue.history[prompt_id],
+                MAXIMUM_HISTORY_SIZE,
+            )
+        except Exception:
+            logger.exception("Failed to persist history item %s", prompt_id)
+
+    def _load_persisted_history(self) -> None:
+        if not self.__history_store:
+            return
+        try:
+            persisted = self.__history_store.load(MAXIMUM_HISTORY_SIZE)
+            persisted.update(self.__prompt_queue.history)
+            self.__prompt_queue.history = persisted
+        except Exception:
+            logger.exception("Failed to restore persisted history")
+
+    def _delete_persisted_history(
+        self, prompt_id: str = None, owner_id: str = None, clear: bool = False
+    ) -> None:
+        if not self.__history_store:
+            return
+        try:
+            if clear:
+                self.__history_store.clear()
+            elif owner_id is not None:
+                self.__history_store.delete_owner(owner_id)
+            elif prompt_id is not None:
+                self.__history_store.delete(prompt_id)
+        except Exception:
+            logger.exception("Failed to update persistent history")
 
     def user_queue_get_current_queue(self):
         """Get the current user-specific queue."""
@@ -466,21 +517,25 @@ class AccessControl:
             current_user_id = self.get_current_user_id()
             if self.is_admin_user(current_user_id):
                 self.__prompt_queue.history = {}
+                self._delete_persisted_history(clear=True)
             else:
                 self.__prompt_queue.history = {
                     k: v
                     for k, v in self.__prompt_queue.history.items()
                     if v.get("user_id") != current_user_id
                 }
+                self._delete_persisted_history(owner_id=current_user_id)
 
     def user_queue_delete_history_item(self, id_to_delete):
         with self.__prompt_queue.mutex:
             history_item = self.__prompt_queue.history.get(id_to_delete)
             if history_item and self._can_access_owner(history_item.get("user_id")):
                 self.__prompt_queue.history.pop(id_to_delete, None)
+                self._delete_persisted_history(prompt_id=id_to_delete)
 
     def patch_prompt_queue(self):
         """Patch the prompt queue with user-specific methods."""
+        self._load_persisted_history()
         self.__prompt_queue.put = self.user_queue_put
         self.__prompt_queue.get = self.user_queue_get
         self.__prompt_queue.task_done = self.user_queue_task_done
