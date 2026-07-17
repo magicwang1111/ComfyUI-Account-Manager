@@ -14,6 +14,7 @@ from server import PromptServer
 from execution import PromptQueue, MAXIMUM_HISTORY_SIZE
 
 from .users_db import UsersDB
+from .history_assets import persist_temp_assets
 from .history_store import HistoryStore
 
 
@@ -380,8 +381,26 @@ class AccessControl:
                 "user_id": user_id,
             }
             self.__prompt_queue.history[prompt[1]].update(history_result)
+            self._persist_history_assets(prompt[1], user_id)
             self._save_history_item(prompt[1])
             self.server.queue_updated()
+
+    def _persist_history_assets(self, prompt_id: str, user_id: str) -> None:
+        if not user_id:
+            return
+        try:
+            destination_subfolder = (
+                f"{self._get_user_path_prefix(user_id)}/history_assets/{prompt_id}"
+            )
+            persist_temp_assets(
+                self.__prompt_queue.history[prompt_id],
+                self.__get_temp_directory(),
+                self.__get_output_directory(),
+                self._get_user_slug(user_id),
+                destination_subfolder,
+            )
+        except Exception:
+            logger.exception("Failed to persist temporary assets for %s", prompt_id)
 
     def _save_history_item(self, prompt_id: str) -> None:
         if not self.__history_store:
