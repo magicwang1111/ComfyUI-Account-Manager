@@ -50,7 +50,7 @@ Edit `config.json` before starting ComfyUI.
 
 Completed generation history is persisted in `history.sqlite3` and restored when ComfyUI restarts. The history database keeps the same 10,000-item limit as ComfyUI's in-memory history.
 
-Temporary preview images, videos, and audio referenced by completed history are linked into the user's persistent output folder before the history entry is saved. This keeps history thumbnails and media available after ComfyUI clears its temp folder during a restart.
+Temporary preview images, videos, and audio referenced by completed history are linked into the user's persistent output folder and registered in ComfyUI's asset database before the history entry is saved. This keeps Job Queue previews and Media Assets available after refreshes and restarts.
 
 ComfyUI's optional Assets panel is separate from queue history and requires starting ComfyUI with `--enable-assets`.
 

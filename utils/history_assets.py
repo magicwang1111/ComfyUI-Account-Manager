@@ -27,16 +27,16 @@ def persist_temp_assets(
     output_root: str,
     owner_slug: str,
     destination_subfolder: str,
-) -> int:
+) -> list[str]:
     """Persist history-only temp references onto durable output paths."""
     owner_parts = _path_parts(owner_slug)
     destination_parts = _path_parts(destination_subfolder)
     if not owner_parts or len(owner_parts) != 1 or not destination_parts:
-        return 0
+        return []
 
     owner_slug = owner_parts[0]
     destination_dir = os.path.join(output_root, *destination_parts)
-    persisted = 0
+    persisted_paths = []
 
     for reference in _iter_temp_references(history_item):
         filename = str(reference.get("filename") or "")
@@ -47,17 +47,32 @@ def persist_temp_assets(
         if not subfolder_parts:
             continue
 
+        destination = os.path.join(destination_dir, filename)
+        if os.path.isfile(destination):
+            reference["type"] = "output"
+            reference["subfolder"] = "/".join(destination_parts)
+            persisted_paths.append(destination)
+            continue
+
         owned_subfolder = (
             subfolder_parts[0] == owner_slug
             or (len(subfolder_parts) >= 2 and subfolder_parts[1] == owner_slug)
         )
-        source_candidates = [
-            os.path.join(temp_root, owner_slug, *subfolder_parts, filename)
-        ]
+        source_roots = [os.path.join(temp_root, owner_slug)]
         if owned_subfolder:
-            source_candidates.append(
-                os.path.join(temp_root, *subfolder_parts, filename)
-            )
+            source_roots.extend([os.path.join(temp_root, "public"), temp_root])
+            if os.path.isdir(temp_root):
+                source_roots.extend(
+                    entry.path
+                    for entry in os.scandir(temp_root)
+                    if entry.is_dir(follow_symlinks=False)
+                )
+
+        source_candidates = []
+        for source_root in source_roots:
+            candidate = os.path.join(source_root, *subfolder_parts, filename)
+            if candidate not in source_candidates:
+                source_candidates.append(candidate)
 
         source = next(
             (candidate for candidate in source_candidates if os.path.isfile(candidate)),
@@ -67,15 +82,13 @@ def persist_temp_assets(
             continue
 
         os.makedirs(destination_dir, exist_ok=True)
-        destination = os.path.join(destination_dir, filename)
-        if not os.path.exists(destination):
-            try:
-                os.link(source, destination)
-            except OSError:
-                shutil.copy2(source, destination)
+        try:
+            os.link(source, destination)
+        except OSError:
+            shutil.copy2(source, destination)
 
         reference["type"] = "output"
         reference["subfolder"] = "/".join(destination_parts)
-        persisted += 1
+        persisted_paths.append(destination)
 
-    return persisted
+    return persisted_paths

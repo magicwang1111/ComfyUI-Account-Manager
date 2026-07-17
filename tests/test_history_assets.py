@@ -42,7 +42,7 @@ class HistoryAssetsTests(unittest.TestCase):
             }
         }
 
-        count = persist_temp_assets(
+        paths = persist_temp_assets(
             item,
             str(self.temp_root),
             str(self.output_root),
@@ -52,7 +52,7 @@ class HistoryAssetsTests(unittest.TestCase):
 
         reference = item["outputs"]["1"]["images"][0]
         destination = self.output_root / reference["subfolder"] / reference["filename"]
-        self.assertEqual(1, count)
+        self.assertEqual([str(destination)], paths)
         self.assertEqual("output", reference["type"])
         self.assertTrue(destination.is_file())
         self.assertEqual(b"preview-data", destination.read_bytes())
@@ -68,7 +68,7 @@ class HistoryAssetsTests(unittest.TestCase):
         }
         item = {"outputs": {"1": {"videos": [reference]}}}
 
-        count = persist_temp_assets(
+        paths = persist_temp_assets(
             item,
             str(self.temp_root),
             str(self.output_root),
@@ -76,7 +76,7 @@ class HistoryAssetsTests(unittest.TestCase):
             "2026-07-17/alice/history_assets/prompt-2",
         )
 
-        self.assertEqual(0, count)
+        self.assertEqual([], paths)
         self.assertEqual("temp", reference["type"])
 
     def test_unowned_base_temp_path_is_not_copied(self):
@@ -90,7 +90,7 @@ class HistoryAssetsTests(unittest.TestCase):
         }
         item = {"outputs": {"1": {"images": [reference]}}}
 
-        count = persist_temp_assets(
+        paths = persist_temp_assets(
             item,
             str(self.temp_root),
             str(self.output_root),
@@ -98,8 +98,56 @@ class HistoryAssetsTests(unittest.TestCase):
             "2026-07-17/alice/history_assets/prompt-3",
         )
 
-        self.assertEqual(0, count)
+        self.assertEqual([], paths)
         self.assertEqual("temp", reference["type"])
+
+    def test_public_temp_path_for_owned_subfolder_is_persisted(self):
+        public_dir = self.temp_root / "public" / "2026-07-17" / "alice"
+        public_dir.mkdir(parents=True)
+        (public_dir / "preview.png").write_bytes(b"public-preview")
+        reference = {
+            "filename": "preview.png",
+            "subfolder": "2026-07-17/alice",
+            "type": "temp",
+        }
+        item = {"outputs": {"1": {"images": [reference]}}}
+
+        paths = persist_temp_assets(
+            item,
+            str(self.temp_root),
+            str(self.output_root),
+            "alice",
+            "2026-07-17/alice/history_assets/prompt-4",
+        )
+
+        destination = self.output_root / reference["subfolder"] / "preview.png"
+        self.assertEqual([str(destination)], paths)
+        self.assertEqual("output", reference["type"])
+        self.assertEqual(b"public-preview", destination.read_bytes())
+
+    def test_cached_temp_root_from_another_node_instance_is_found(self):
+        cached_dir = self.temp_root / "cached-owner" / "2026-07-17" / "alice"
+        cached_dir.mkdir(parents=True)
+        (cached_dir / "preview.png").write_bytes(b"cached-preview")
+        reference = {
+            "filename": "preview.png",
+            "subfolder": "2026-07-17/alice",
+            "type": "temp",
+        }
+        item = {"outputs": {"1": {"images": [reference]}}}
+
+        paths = persist_temp_assets(
+            item,
+            str(self.temp_root),
+            str(self.output_root),
+            "alice",
+            "2026-07-17/alice/history_assets/prompt-5",
+        )
+
+        destination = self.output_root / reference["subfolder"] / "preview.png"
+        self.assertEqual([str(destination)], paths)
+        self.assertEqual("output", reference["type"])
+        self.assertEqual(b"cached-preview", destination.read_bytes())
 
 
 if __name__ == "__main__":

@@ -392,15 +392,30 @@ class AccessControl:
             destination_subfolder = (
                 f"{self._get_user_path_prefix(user_id)}/history_assets/{prompt_id}"
             )
-            persist_temp_assets(
+            persisted_paths = persist_temp_assets(
                 self.__prompt_queue.history[prompt_id],
                 self.__get_temp_directory(),
                 self.__get_output_directory(),
                 self._get_user_slug(user_id),
                 destination_subfolder,
             )
+            if persisted_paths:
+                self._register_history_assets(persisted_paths, prompt_id, user_id)
         except Exception:
             logger.exception("Failed to persist temporary assets for %s", prompt_id)
+
+    @staticmethod
+    def _register_history_assets(paths: list[str], prompt_id: str, user_id: str) -> None:
+        try:
+            from app.assets.services.ingest import ingest_existing_file
+        except Exception:
+            return
+
+        for path in paths:
+            try:
+                ingest_existing_file(path, owner_id=user_id, job_id=prompt_id)
+            except Exception:
+                logger.exception("Failed to register persistent history asset %s", path)
 
     def _save_history_item(self, prompt_id: str) -> None:
         if not self.__history_store:
