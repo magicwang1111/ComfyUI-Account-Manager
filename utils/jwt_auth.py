@@ -79,6 +79,7 @@ class JWTAuth:
                         f"User with username: {username} is not in the database"
                     )
 
+                self.access_control.sync_comfy_users()
                 request["user_id"] = user_id
                 request["user"] = username
 

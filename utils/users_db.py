@@ -2,12 +2,16 @@ import bcrypt
 import json
 import os
 import hashlib
+import tempfile
 from pathlib import Path
+
+from filelock import FileLock
 
 
 class UsersDB:
     def __init__(self, database: str | Path):
         self.database = database
+        self._lock = FileLock(f"{self.database}.lock", timeout=15)
 
         self.users = {}
         self.admin_user = (None, {})
@@ -44,19 +48,46 @@ class UsersDB:
 
     def save_users(self, users: dict) -> None:
         """Save users to the database and update the hash."""
-        with open(self.database, "w") as f:
-            json.dump(users, f)
+        with self._lock:
+            self._save_users_unlocked(users)
 
+    def _save_users_unlocked(self, users: dict) -> None:
+        database_path = Path(self.database)
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{database_path.name}.",
+            suffix=".tmp",
+            dir=database_path.parent,
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(users, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, database_path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+        self.users = dict(users)
         self._database_hash = self.calculate_file_hash()
 
     def add_user(self, id: str, username: str, password: str, admin: bool) -> None:
         """Add a user to the database."""
-        self.load_users()
-        user = {"username": username, "password": self.hash_password(password)}
-        if admin:
-            user["admin"] = admin
-        self.users[id] = user
-        self.save_users(self.users)
+        with self._lock:
+            users = {}
+            if os.path.exists(self.database):
+                with open(self.database, "r", encoding="utf-8") as handle:
+                    try:
+                        users = json.load(handle)
+                    except json.JSONDecodeError:
+                        users = {}
+            if any(user.get("username") == username for user in users.values()):
+                raise ValueError("Username already exists")
+            user = {"username": username, "password": self.hash_password(password)}
+            if admin:
+                user["admin"] = admin
+            users[id] = user
+            self._save_users_unlocked(users)
 
     def get_user(self, username: str = "", user_id: str = "") -> tuple[str, dict]:
         """Retrieve a user by username or ID."""

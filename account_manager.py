@@ -16,11 +16,41 @@ sanitizer = Sanitizer()
 ip_filter = IPFilter(WHITELIST, BLACKLIST)
 timeout = Timeout(ip_filter, BLACKLIST_AFTER_ATTEMPTS)
 users_db = UsersDB(USERS_FILE)
-access_control = AccessControl(users_db, instance, HISTORY_FILE)
+scheduler = None
+event_relay = None
+internal_signer = None
+if DISTRIBUTED_QUEUE_ENABLED:
+    scheduler = SchedulerStore(
+        SCHEDULER_FILE,
+        max_concurrent_jobs_per_user=MAX_CONCURRENT_JOBS_PER_USER,
+        admin_concurrency_limit=ADMIN_CONCURRENCY_LIMIT,
+    )
+    internal_signer = InternalSigner(SCHEDULER_SECRET_FILE)
+
+access_control = AccessControl(
+    users_db,
+    instance,
+    HISTORY_FILE,
+    scheduler=scheduler,
+    instance_port=INSTANCE_PORT,
+    heartbeat_seconds=WORKER_HEARTBEAT_SECONDS,
+    stale_seconds=WORKER_STALE_SECONDS,
+)
 jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
 )
 access_control.sync_comfy_users()
+
+if scheduler:
+    event_relay = EventRelay(instance, scheduler, internal_signer, INSTANCE_PORT)
+    event_relay.install()
+
+
+@routes.post(EventRelay.PATH)
+async def post_internal_event(request: web.Request) -> web.Response:
+    if not event_relay:
+        return web.json_response({"error": "Distributed queue is disabled"}, status=404)
+    return await event_relay.handle_event(request)
 
 
 @routes.get("/register")
@@ -85,12 +115,15 @@ async def post_register(request: web.Request) -> web.Response:
         return web.json_response({"error": "Username already exists"}, status=400)
 
     new_user_id = str(uuid.uuid4())
-    users_db.add_user(
-        new_user_id,
-        new_user_username,
-        new_user_password,
-        not bool(admin_user_id),
-    )
+    try:
+        users_db.add_user(
+            new_user_id,
+            new_user_username,
+            new_user_password,
+            not bool(admin_user_id),
+        )
+    except ValueError:
+        return web.json_response({"error": "Username already exists"}, status=400)
     access_control.sync_comfy_users()
 
     logger.registration_success(
@@ -292,6 +325,16 @@ app.middlewares.append(
         public_prefixes=("/account-manager"),
     )
 )
+
+if scheduler:
+    distributed_routes = DistributedRoutes(
+        scheduler,
+        internal_signer,
+        users_db,
+        INSTANCE_PORT,
+        WORKER_STALE_SECONDS,
+    )
+    app.middlewares.append(distributed_routes.middleware())
 
 if SEPERATE_USERS:
     access_control.patch_comfy_user_manager()

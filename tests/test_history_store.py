@@ -60,6 +60,13 @@ class HistoryStoreTests(unittest.TestCase):
         self.store.clear()
         self.assertEqual({}, self.store.load(10))
 
+    def test_live_query_filters_owner_and_prompt(self):
+        self.store.save("one", self.item("user-a", 1), 10)
+        self.store.save("two", self.item("user-b", 2), 10)
+
+        self.assertEqual(["one"], list(self.store.query(owner_id="user-a")))
+        self.assertEqual(["two"], list(self.store.query(prompt_id="two")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ import copy
 import contextvars
 import logging
 import mimetypes
+import time
 from datetime import datetime
 from aiohttp import web
 from typing import Optional
@@ -16,6 +17,7 @@ from execution import PromptQueue, MAXIMUM_HISTORY_SIZE
 from .users_db import UsersDB
 from .history_assets import iter_temp_references, persist_temp_assets
 from .history_store import HistoryStore
+from .scheduler_store import SchedulerStore, WorkerHeartbeat
 
 
 logger = logging.getLogger("ComfyUI-Account-Manager")
@@ -23,10 +25,20 @@ logger = logging.getLogger("ComfyUI-Account-Manager")
 
 class AccessControl:
     def __init__(
-        self, users_db: UsersDB, server: PromptServer, history_file: str = None
+        self,
+        users_db: UsersDB,
+        server: PromptServer,
+        history_file: str = None,
+        scheduler: SchedulerStore = None,
+        instance_port: int = 0,
+        heartbeat_seconds: int = 5,
+        stale_seconds: int = 60,
     ):
         self.users_db = users_db
         self.server = server
+        self.scheduler = scheduler
+        self.instance_port = int(instance_port or 0)
+        self._worker_heartbeat = None
 
         self._current_user = contextvars.ContextVar("user_id", default=None)
         self.__current_user_id = None
@@ -48,6 +60,14 @@ class AccessControl:
         self.__user_manager_get_request_user_id = getattr(
             self.server.user_manager, "get_request_user_id", None
         )
+        if self.scheduler and self.instance_port:
+            self._worker_heartbeat = WorkerHeartbeat(
+                self.scheduler,
+                self.instance_port,
+                heartbeat_seconds,
+                stale_seconds,
+            )
+            self._worker_heartbeat.start()
 
     @property
     def folder_paths(self) -> tuple:
@@ -326,6 +346,19 @@ class AccessControl:
 
     def user_queue_put(self, item):
         """Put an item in the user-specific queue."""
+        if self.scheduler:
+            user_id = self.get_current_user_id() or ""
+            self.scheduler.enqueue(
+                self._unwrap_queue_item(item),
+                user_id,
+                self.instance_port,
+                concurrency_exempt=self.is_admin_user(user_id),
+            )
+            self.server.queue_updated()
+            with self.__prompt_queue.not_empty:
+                self.__prompt_queue.not_empty.notify_all()
+            return
+
         wrapped_item = self._wrap_queue_item(item)
         with self.__prompt_queue.mutex:
             heapq.heappush(self.__prompt_queue.queue, wrapped_item)
@@ -334,6 +367,27 @@ class AccessControl:
 
     def user_queue_get(self, timeout=None):
         """Get an item from the user-specific queue."""
+        if self.scheduler:
+            started = time.monotonic()
+            while True:
+                wrapped_item = self.scheduler.claim(
+                    self.instance_port, os.getpid()
+                )
+                if wrapped_item is not None:
+                    user_id = self._queue_item_user_id(wrapped_item)
+                    self.set_current_user_id(user_id, True)
+                    with self.__prompt_queue.mutex:
+                        item_id = self.__prompt_queue.task_counter
+                        self.__prompt_queue.currently_running[item_id] = copy.deepcopy(
+                            wrapped_item
+                        )
+                        self.__prompt_queue.task_counter += 1
+                    self.server.queue_updated()
+                    return (self._unwrap_queue_item(wrapped_item), item_id)
+                if timeout is not None and time.monotonic() - started >= timeout:
+                    return None
+                time.sleep(0.2)
+
         user_queue = self.__prompt_queue.queue
         with self.__prompt_queue.not_empty:
             while len(user_queue) == 0:
@@ -382,8 +436,59 @@ class AccessControl:
             }
             self.__prompt_queue.history[prompt[1]].update(history_result)
             self._persist_history_assets(prompt[1], user_id)
+            self._index_history_assets(prompt[1], user_id)
             self._save_history_item(prompt[1])
+            if self.scheduler:
+                status_text = getattr(status, "status_str", "success") if status else "success"
+                messages = getattr(status, "messages", []) if status else []
+                for attempt in range(3):
+                    try:
+                        self.scheduler.complete(
+                            prompt[1],
+                            self.instance_port,
+                            succeeded=status_text == "success",
+                            error="\n".join(str(message) for message in messages),
+                        )
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            logger.exception(
+                                "Failed to complete distributed task %s", prompt[1]
+                            )
+                        else:
+                            time.sleep(0.2 * (attempt + 1))
             self.server.queue_updated()
+
+    def _index_history_assets(self, prompt_id: str, user_id: str) -> None:
+        if not self.scheduler:
+            return
+
+        def visit(value):
+            if isinstance(value, dict):
+                asset_id = str(value.get("id") or "")
+                if asset_id and (
+                    value.get("filename")
+                    or value.get("file_path")
+                    or value.get("fullpath")
+                ):
+                    self.scheduler.upsert_asset(
+                        asset_id,
+                        user_id,
+                        prompt_id,
+                        self.instance_port,
+                        value,
+                    )
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, (list, tuple)):
+                for child in value:
+                    visit(child)
+
+        try:
+            history_item = self.__prompt_queue.history.get(prompt_id, {})
+            visit(history_item.get("outputs", {}))
+        except Exception:
+            logger.exception("Failed to index distributed assets for %s", prompt_id)
 
     def _persist_history_assets(self, prompt_id: str, user_id: str) -> None:
         if not user_id:
@@ -506,6 +611,12 @@ class AccessControl:
 
     def user_queue_get_current_queue(self):
         """Get the current user-specific queue."""
+        if self.scheduler:
+            current_user_id = self.get_current_user_id()
+            return self.scheduler.visible_items(
+                current_user_id,
+                admin=self.is_admin_user(current_user_id),
+            )
         with self.__prompt_queue.mutex:
             running = self._visible_queue_items(self.__prompt_queue.currently_running.values())
             queued = self._visible_queue_items(copy.deepcopy(self.__prompt_queue.queue))
@@ -513,12 +624,17 @@ class AccessControl:
 
     def user_queue_get_current_queue_volatile(self):
         """Get the current user-specific queue without deep copying items."""
+        if self.scheduler:
+            return self.user_queue_get_current_queue()
         with self.__prompt_queue.mutex:
             running = self._visible_queue_items(self.__prompt_queue.currently_running.values())
             queued = self._visible_queue_items(copy.copy(self.__prompt_queue.queue))
             return (running, queued)
 
     def user_queue_get_tasks_remaining(self):
+        if self.scheduler:
+            running, queued = self.user_queue_get_current_queue()
+            return len(running) + len(queued)
         with self.__prompt_queue.mutex:
             return (
                 len(self._visible_queue_items(self.__prompt_queue.queue))
@@ -527,6 +643,14 @@ class AccessControl:
 
     def user_queue_wipe_queue(self):
         """Wipe the current user's queue, or all queue items for admins."""
+        if self.scheduler:
+            current_user_id = self.get_current_user_id()
+            self.scheduler.cancel_all(
+                current_user_id,
+                admin=self.is_admin_user(current_user_id),
+            )
+            self.server.queue_updated()
+            return
         with self.__prompt_queue.mutex:
             current_user_id = self.get_current_user_id()
             if self.is_admin_user(current_user_id):
@@ -541,6 +665,16 @@ class AccessControl:
 
     def user_queue_delete_queue_item(self, function):
         """Delete an item from the current user's queue."""
+        if self.scheduler:
+            current_user_id = self.get_current_user_id()
+            deleted = self.scheduler.delete_matching(
+                function,
+                current_user_id,
+                admin=self.is_admin_user(current_user_id),
+            )
+            if deleted:
+                self.server.queue_updated()
+            return deleted
         with self.__prompt_queue.mutex:
             for x in range(len(self.__prompt_queue.queue)):
                 item = self.__prompt_queue.queue[x]
@@ -567,6 +701,17 @@ class AccessControl:
 
     def user_queue_get_history(self, prompt_id=None, max_items=None, offset=-1, map_function=None):
         """Get the current user's queue history."""
+        if self.scheduler and self.__history_store:
+            current_user_id = self.get_current_user_id()
+            history = self.__history_store.query(
+                max_items=max_items,
+                offset=offset,
+                owner_id=None if self.is_admin_user(current_user_id) else current_user_id,
+                prompt_id=prompt_id,
+            )
+            if map_function is not None:
+                return {key: map_function(value) for key, value in history.items()}
+            return history
         with self.__prompt_queue.mutex:
             user_history = self._visible_history()
             if prompt_id is None:
@@ -597,6 +742,13 @@ class AccessControl:
 
     def user_queue_wipe_history(self):
         """Wipe the current user's history, or all history for admins."""
+        if self.scheduler:
+            current_user_id = self.get_current_user_id()
+            if self.is_admin_user(current_user_id):
+                self._delete_persisted_history(clear=True)
+            else:
+                self._delete_persisted_history(owner_id=current_user_id)
+            return
         with self.__prompt_queue.mutex:
             current_user_id = self.get_current_user_id()
             if self.is_admin_user(current_user_id):
@@ -611,6 +763,15 @@ class AccessControl:
                 self._delete_persisted_history(owner_id=current_user_id)
 
     def user_queue_delete_history_item(self, id_to_delete):
+        if self.scheduler and self.__history_store:
+            current_user_id = self.get_current_user_id()
+            visible = self.__history_store.query(
+                owner_id=None if self.is_admin_user(current_user_id) else current_user_id,
+                prompt_id=id_to_delete,
+            )
+            if id_to_delete in visible:
+                self._delete_persisted_history(prompt_id=id_to_delete)
+            return
         with self.__prompt_queue.mutex:
             history_item = self.__prompt_queue.history.get(id_to_delete)
             if history_item and self._can_access_owner(history_item.get("user_id")):
@@ -619,7 +780,8 @@ class AccessControl:
 
     def patch_prompt_queue(self):
         """Patch the prompt queue with user-specific methods."""
-        self._load_persisted_history()
+        if not self.scheduler:
+            self._load_persisted_history()
         self.__prompt_queue.put = self.user_queue_put
         self.__prompt_queue.get = self.user_queue_get
         self.__prompt_queue.task_done = self.user_queue_task_done

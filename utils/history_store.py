@@ -14,10 +14,14 @@ class HistoryStore:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.database, timeout=10)
+        connection = sqlite3.connect(self.database, timeout=15)
+        connection.execute("PRAGMA busy_timeout=15000")
+        return connection
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
             with connection:
                 connection.execute(
                     """
@@ -53,6 +57,54 @@ class HistoryStore:
             item["user_id"] = owner_id
             history[prompt_id] = item
         return history
+
+    def query(
+        self,
+        max_items: int = None,
+        offset: int = -1,
+        owner_id: str = None,
+        prompt_id: str = None,
+    ) -> dict:
+        """Read current history directly from SQLite for all instances."""
+        conditions = []
+        params = []
+        if owner_id is not None:
+            conditions.append("owner_id = ?")
+            params.append(owner_id)
+        if prompt_id is not None:
+            conditions.append("prompt_id = ?")
+            params.append(prompt_id)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        count_sql = f"SELECT COUNT(*) FROM history {where}"
+        with closing(self._connect()) as connection:
+            total = connection.execute(count_sql, tuple(params)).fetchone()[0]
+            normalized_offset = int(offset)
+            if normalized_offset < 0:
+                normalized_offset = max(0, total - int(max_items or total))
+
+            sql = f"""
+                SELECT prompt_id, owner_id, data
+                FROM history
+                {where}
+                ORDER BY sequence ASC
+            """
+            query_params = list(params)
+            if max_items is not None:
+                sql += " LIMIT ? OFFSET ?"
+                query_params.extend((int(max_items), normalized_offset))
+            elif normalized_offset:
+                sql += " LIMIT -1 OFFSET ?"
+                query_params.append(normalized_offset)
+            rows = connection.execute(sql, tuple(query_params)).fetchall()
+
+        result = {}
+        for current_prompt_id, current_owner_id, data in rows:
+            item = json.loads(data)
+            if isinstance(item, dict):
+                item["user_id"] = current_owner_id
+                result[current_prompt_id] = item
+        return result
 
     def save(self, prompt_id: str, item: dict, max_items: int) -> None:
         owner_id = item.get("user_id") or ""

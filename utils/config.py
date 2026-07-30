@@ -1,4 +1,5 @@
 import os
+import sys
 import warnings
 import uuid
 import json
@@ -43,6 +44,9 @@ MAX_TOKEN_EXPIRE_MINUTES = 60 * config.get("max_access_token_expiration_hours", 
 
 USERS_FILE = os.path.join(EXT_PATH, config.get("users_db", "users_db.json"))
 HISTORY_FILE = os.path.join(EXT_PATH, config.get("history_db", "history.sqlite3"))
+SCHEDULER_FILE = os.path.join(
+    EXT_PATH, config.get("scheduler_db", "scheduler.sqlite3")
+)
 LOG_FILE = os.path.join(EXT_PATH, config.get("log", "account_manager.log"))
 LOG_LEVELS = config.get("log_levels", ["INFO"])
 
@@ -58,6 +62,37 @@ SEPARATE_USERS = config.get("separate_users", config.get("seperate_users", False
 SEPERATE_USERS = SEPARATE_USERS
 
 MANAGER_ADMIN_ONLY = config.get("manager_admin_only", False)
+
+DISTRIBUTED_QUEUE_ENABLED = config.get("distributed_queue_enabled", False)
+MAX_CONCURRENT_JOBS_PER_USER = max(
+    1, int(config.get("max_concurrent_jobs_per_user", 6))
+)
+ADMIN_CONCURRENCY_LIMIT = max(0, int(config.get("admin_concurrency_limit", 0)))
+WORKER_HEARTBEAT_SECONDS = max(1, int(config.get("worker_heartbeat_seconds", 5)))
+WORKER_STALE_SECONDS = max(
+    WORKER_HEARTBEAT_SECONDS * 2,
+    int(config.get("worker_stale_seconds", 60)),
+)
+SCHEDULER_SECRET_FILE = os.path.join(
+    EXT_PATH, config.get("scheduler_secret_file", "scheduler_secret.txt")
+)
+
+
+def _runtime_port() -> int:
+    configured = os.getenv("ACCOUNT_MANAGER_INSTANCE_PORT", "").strip()
+    if configured:
+        try:
+            return int(configured)
+        except ValueError:
+            warnings.warn("ACCOUNT_MANAGER_INSTANCE_PORT must be an integer")
+    try:
+        index = sys.argv.index("--port")
+        return int(sys.argv[index + 1])
+    except (ValueError, IndexError):
+        return 8188
+
+
+INSTANCE_PORT = _runtime_port()
 
 WEB_DIR = os.path.join(EXT_PATH, "account-manager-web")
 HTML_DIR = WEB_DIR

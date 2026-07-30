@@ -7,3 +7,6 @@ blacklist.txt
 .env
 secret_key.txt
 history.sqlite3*
+scheduler.sqlite3*
+scheduler_secret.txt
+*.lock

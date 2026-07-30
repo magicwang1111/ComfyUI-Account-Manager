@@ -3,7 +3,7 @@ name = "comfyui-account-manager"
 description = "ComfyUI extension for account login, multi-user registration, and per-account asset isolation."
 version = "3.0.0"
 license = {file = "LICENSE"}
-dependencies = ["aiohttp", "PyJWT", "bcrypt", "bleach"]
+dependencies = ["aiohttp", "PyJWT", "bcrypt", "bleach", "filelock"]
 
 [project.urls]
 Repository = "https://github.com/magicwang1111/ComfyUI-Account-Manager"
