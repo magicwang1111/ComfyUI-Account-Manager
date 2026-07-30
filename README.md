@@ -1,5 +1,7 @@
 # ComfyUI Account Manager
 
+[中文使用文档：30实例全局调度](docs/30实例全局调度中文使用文档.md)
+
 ComfyUI Account Manager adds login, admin-managed user registration, API token generation, IP filtering, and per-account asset isolation to ComfyUI through a custom node extension.
 
 ## Features
