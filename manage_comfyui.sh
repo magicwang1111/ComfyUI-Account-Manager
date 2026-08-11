@@ -163,6 +163,7 @@ build_launch_command() {
     "${PYTHON_BIN}"
     main.py
     --enable-assets
+    --enable-manager
     --database-url "${database_url}"
     --listen "${HOST}"
     --port "${port}"

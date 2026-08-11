@@ -62,11 +62,15 @@ Edit `config.json` before starting ComfyUI.
   "free_memory_on_logout": false,
   "force_https": false,
   "separate_users": true,
-  "manager_admin_only": false
+  "manager_admin_only": true
 }
 ```
 
 `separate_users` enables account-specific inputs, outputs, queue history, and asset visibility. The older misspelled `seperate_users` key is still accepted for compatibility, but new installs should use `separate_users`.
+
+`manage_comfyui.sh` enables the built-in Node Manager on every worker. Keep
+`manager_admin_only: true` so only administrators can install or update custom
+node code.
 
 `distributed_queue_enabled` lets multiple ComfyUI processes share one validated
 prompt queue. Every process must use the same Account Manager directory and must
