@@ -9,7 +9,7 @@
     "admin_concurrency_limit": 0,
     "resource_concurrency_limits": {
         "gpu": 2,
-        "api": 20
+        "api": 5
     },
     "gpu_node_types": [
         "CheckpointLoader",

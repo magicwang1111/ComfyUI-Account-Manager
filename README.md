@@ -40,7 +40,7 @@ Edit `config.json` before starting ComfyUI.
   "admin_concurrency_limit": 0,
   "resource_concurrency_limits": {
     "gpu": 2,
-    "api": 20
+    "api": 5
   },
   "gpu_node_types": [
     "CheckpointLoaderSimple",
@@ -85,9 +85,9 @@ capacity. A worker declares its pool with `ACCOUNT_MANAGER_WORKER_CLASS=gpu`
 or `ACCOUNT_MANAGER_WORKER_CLASS=api`. If these resource settings and the
 worker variable are omitted, the original single-pool behavior remains active.
 
-The included `manage_comfyui.sh` starts 11 workers on ports 6006-6016 by
+The included `manage_comfyui.sh` starts 42 workers on ports 6006-6047 by
 default. Ports 6006 and 6008 are dedicated GPU workers, one per physical GPU,
-and the remaining nine use `--cpu` for API workflows. Override `GPU_COUNT`,
+and the remaining 40 use `--cpu` for API workflows. Override `GPU_COUNT`,
 `GPU_WORKER_COUNT`, and `GPU_WORKER_INDICES` when the host layout differs. Every worker keeps
 `--enable-assets` and receives its own ComfyUI asset database. Account Manager
 keeps the queue, history, ownership metadata, and cross-worker event routing in
