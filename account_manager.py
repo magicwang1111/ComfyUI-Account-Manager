@@ -24,6 +24,8 @@ if DISTRIBUTED_QUEUE_ENABLED:
         SCHEDULER_FILE,
         max_concurrent_jobs_per_user=MAX_CONCURRENT_JOBS_PER_USER,
         admin_concurrency_limit=ADMIN_CONCURRENCY_LIMIT,
+        resource_concurrency_limits=RESOURCE_CONCURRENCY_LIMITS,
+        gpu_node_types=GPU_NODE_TYPES,
     )
     internal_signer = InternalSigner(SCHEDULER_SECRET_FILE)
 
@@ -35,6 +37,7 @@ access_control = AccessControl(
     instance_port=INSTANCE_PORT,
     heartbeat_seconds=WORKER_HEARTBEAT_SECONDS,
     stale_seconds=WORKER_STALE_SECONDS,
+    worker_resource_class=WORKER_RESOURCE_CLASS,
 )
 jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM

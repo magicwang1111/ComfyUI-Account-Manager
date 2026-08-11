@@ -68,6 +68,8 @@ MAX_CONCURRENT_JOBS_PER_USER = max(
     1, int(config.get("max_concurrent_jobs_per_user", 6))
 )
 ADMIN_CONCURRENCY_LIMIT = max(0, int(config.get("admin_concurrency_limit", 0)))
+RESOURCE_CONCURRENCY_LIMITS = config.get("resource_concurrency_limits", {})
+GPU_NODE_TYPES = config.get("gpu_node_types", [])
 WORKER_HEARTBEAT_SECONDS = max(1, int(config.get("worker_heartbeat_seconds", 5)))
 WORKER_STALE_SECONDS = max(
     WORKER_HEARTBEAT_SECONDS * 2,
@@ -93,6 +95,9 @@ def _runtime_port() -> int:
 
 
 INSTANCE_PORT = _runtime_port()
+WORKER_RESOURCE_CLASS = (
+    os.getenv("ACCOUNT_MANAGER_WORKER_CLASS", "default").strip().lower() or "default"
+)
 
 WEB_DIR = os.path.join(EXT_PATH, "account-manager-web")
 HTML_DIR = WEB_DIR

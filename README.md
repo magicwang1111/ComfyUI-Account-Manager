@@ -38,6 +38,17 @@ Edit `config.json` before starting ComfyUI.
   "scheduler_db": "scheduler.sqlite3",
   "max_concurrent_jobs_per_user": 6,
   "admin_concurrency_limit": 0,
+  "resource_concurrency_limits": {
+    "gpu": 2,
+    "api": 20
+  },
+  "gpu_node_types": [
+    "CheckpointLoaderSimple",
+    "UNETLoader",
+    "KSampler",
+    "SamplerCustomAdvanced",
+    "MiniMaxH3TurboSampler"
+  ],
   "worker_heartbeat_seconds": 5,
   "worker_stale_seconds": 60,
   "scheduler_secret_file": "scheduler_secret.txt",
@@ -64,10 +75,23 @@ can run up to `max_concurrent_jobs_per_user` prompts across the whole worker
 pool; additional prompts stay queued. `admin_concurrency_limit: 0` makes the
 administrator exempt from this execution limit.
 
-The included `manage_comfyui.sh` starts 30 workers on ports 8180-8209 by
-default, keeps `--enable-assets`, and gives every worker its own ComfyUI asset
-database. Account Manager keeps the queue, history, ownership metadata, and
-cross-worker event routing in shared plugin-managed storage.
+When `gpu_node_types` is non-empty, Account Manager scans the submitted API
+prompt once at the shared queue boundary. A workflow containing any listed
+`class_type` is stored as a `gpu` job; every other workflow is stored as an
+`api` job. No custom node changes are required. Mixed workflows are classified
+as `gpu`. `resource_concurrency_limits` sets the per-account limit for each
+pool, while the number of live workers in that pool remains the global physical
+capacity. A worker declares its pool with `ACCOUNT_MANAGER_WORKER_CLASS=gpu`
+or `ACCOUNT_MANAGER_WORKER_CLASS=api`. If these resource settings and the
+worker variable are omitted, the original single-pool behavior remains active.
+
+The included `manage_comfyui.sh` starts 11 workers on ports 6006-6016 by
+default. Ports 6006 and 6008 are dedicated GPU workers, one per physical GPU,
+and the remaining nine use `--cpu` for API workflows. Override `GPU_COUNT`,
+`GPU_WORKER_COUNT`, and `GPU_WORKER_INDICES` when the host layout differs. Every worker keeps
+`--enable-assets` and receives its own ComfyUI asset database. Account Manager
+keeps the queue, history, ownership metadata, and cross-worker event routing in
+shared plugin-managed storage.
 
 Completed generation history is persisted in `history.sqlite3` and restored when ComfyUI restarts. The history database keeps the same 10,000-item limit as ComfyUI's in-memory history.
 

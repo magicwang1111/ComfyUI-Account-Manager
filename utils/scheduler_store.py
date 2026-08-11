@@ -24,11 +24,20 @@ class SchedulerStore:
         database: str,
         max_concurrent_jobs_per_user: int = 6,
         admin_concurrency_limit: int = 0,
+        resource_concurrency_limits: dict = None,
+        gpu_node_types: list = None,
         busy_timeout_ms: int = 15000,
     ):
         self.database = os.fspath(database)
         self.max_concurrent_jobs_per_user = max(1, int(max_concurrent_jobs_per_user))
         self.admin_concurrency_limit = max(0, int(admin_concurrency_limit))
+        self.resource_concurrency_limits = {
+            str(name): max(1, int(limit))
+            for name, limit in (resource_concurrency_limits or {}).items()
+        }
+        self.gpu_node_types = {
+            str(node_type) for node_type in (gpu_node_types or []) if node_type
+        }
         self.busy_timeout_ms = max(1000, int(busy_timeout_ms))
         os.makedirs(os.path.dirname(os.path.abspath(self.database)), exist_ok=True)
         self._initialize()
@@ -98,6 +107,81 @@ class SchedulerStore:
                     ON scheduler_assets(owner_id, updated_at DESC);
                 """
             )
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._ensure_column(
+                    connection,
+                    "scheduler_jobs",
+                    "resource_class",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                )
+                self._ensure_column(
+                    connection,
+                    "scheduler_workers",
+                    "resource_class",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                )
+                connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS scheduler_jobs_resource_status
+                    ON scheduler_jobs(resource_class, status, priority, sequence)
+                    """
+                )
+                self._classify_legacy_queued_jobs(connection)
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
+
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection, table: str, column: str, definition: str
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
+
+    def _classify_legacy_queued_jobs(self, connection: sqlite3.Connection) -> None:
+        if not self.gpu_node_types:
+            return
+        rows = connection.execute(
+            """
+            SELECT prompt_id, payload, concurrency_limit
+            FROM scheduler_jobs
+            WHERE status = ? AND resource_class = 'default'
+            """,
+            (QUEUED,),
+        ).fetchall()
+        for row in rows:
+            resource_class = self.classify_item(self._decode_item(row["payload"]))
+            limit = int(row["concurrency_limit"])
+            if limit:
+                limit = self.resource_concurrency_limits.get(resource_class, limit)
+            connection.execute(
+                """
+                UPDATE scheduler_jobs
+                SET resource_class = ?, concurrency_limit = ?
+                WHERE prompt_id = ? AND status = ? AND resource_class = 'default'
+                """,
+                (resource_class, limit, row["prompt_id"], QUEUED),
+            )
+
+    def classify_item(self, item: tuple) -> str:
+        if not self.gpu_node_types:
+            return "default"
+        prompt = item[2] if len(item) > 2 and isinstance(item[2], dict) else {}
+        for node in prompt.values():
+            if (
+                isinstance(node, dict)
+                and str(node.get("class_type") or "") in self.gpu_node_types
+            ):
+                return "gpu"
+        return "api"
 
     @staticmethod
     def _encode_item(item: tuple) -> str:
@@ -118,14 +202,18 @@ class SchedulerStore:
         owner_id: str,
         ingress_port: int,
         concurrency_exempt: bool = False,
+        resource_class: str = None,
     ) -> None:
         prompt_id = str(item[1])
         extra_data = item[3] if isinstance(item[3], dict) else {}
         client_id = str(extra_data.get("client_id") or "") or None
+        resource_class = str(resource_class or self.classify_item(item))
         limit = (
             self.admin_concurrency_limit
             if concurrency_exempt
-            else self.max_concurrent_jobs_per_user
+            else self.resource_concurrency_limits.get(
+                resource_class, self.max_concurrent_jobs_per_user
+            )
         )
         now = time.time()
         with closing(self._connect()) as connection:
@@ -135,8 +223,9 @@ class SchedulerStore:
                     """
                     INSERT INTO scheduler_jobs (
                         prompt_id, owner_id, client_id, ingress_port, priority,
-                        payload, status, concurrency_limit, submitted_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        payload, status, concurrency_limit, resource_class,
+                        submitted_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         prompt_id,
@@ -147,6 +236,7 @@ class SchedulerStore:
                         self._encode_item(item),
                         QUEUED,
                         limit,
+                        resource_class,
                         now,
                     ),
                 )
@@ -155,8 +245,11 @@ class SchedulerStore:
                 connection.execute("ROLLBACK")
                 raise
 
-    def register_worker(self, port: int, pid: int) -> None:
+    def register_worker(
+        self, port: int, pid: int, resource_class: str = "default"
+    ) -> None:
         now = time.time()
+        resource_class = str(resource_class or "default")
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -181,35 +274,46 @@ class SchedulerStore:
                     )
                 connection.execute(
                     """
-                    INSERT INTO scheduler_workers(port, pid, active_prompt_id, last_heartbeat)
-                    VALUES (?, ?, NULL, ?)
+                    INSERT INTO scheduler_workers(
+                        port, pid, active_prompt_id, last_heartbeat, resource_class
+                    ) VALUES (?, ?, NULL, ?, ?)
                     ON CONFLICT(port) DO UPDATE SET
                         pid = excluded.pid,
                         active_prompt_id = NULL,
-                        last_heartbeat = excluded.last_heartbeat
+                        last_heartbeat = excluded.last_heartbeat,
+                        resource_class = excluded.resource_class
                     """,
-                    (int(port), int(pid), now),
+                    (int(port), int(pid), now, resource_class),
                 )
                 connection.execute("COMMIT")
             except Exception:
                 connection.execute("ROLLBACK")
                 raise
 
-    def heartbeat(self, port: int, pid: int, stale_seconds: int) -> list[str]:
+    def heartbeat(
+        self,
+        port: int,
+        pid: int,
+        stale_seconds: int,
+        resource_class: str = "default",
+    ) -> list[str]:
         now = time.time()
+        resource_class = str(resource_class or "default")
         lost = []
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
                     """
-                    INSERT INTO scheduler_workers(port, pid, active_prompt_id, last_heartbeat)
-                    VALUES (?, ?, NULL, ?)
+                    INSERT INTO scheduler_workers(
+                        port, pid, active_prompt_id, last_heartbeat, resource_class
+                    ) VALUES (?, ?, NULL, ?, ?)
                     ON CONFLICT(port) DO UPDATE SET
                         pid = excluded.pid,
-                        last_heartbeat = excluded.last_heartbeat
+                        last_heartbeat = excluded.last_heartbeat,
+                        resource_class = excluded.resource_class
                     """,
-                    (int(port), int(pid), now),
+                    (int(port), int(pid), now, resource_class),
                 )
                 stale = connection.execute(
                     """
@@ -247,9 +351,12 @@ class SchedulerStore:
                 raise
         return lost
 
-    def claim(self, port: int, pid: int) -> Optional[tuple]:
+    def claim(
+        self, port: int, pid: int, resource_class: str = "default"
+    ) -> Optional[tuple]:
         """Claim the first eligible job and return its ComfyUI queue tuple."""
         now = time.time()
+        resource_class = str(resource_class or "default")
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -272,29 +379,37 @@ class SchedulerStore:
                     FROM scheduler_jobs AS candidate
                     WHERE candidate.status = ?
                       AND (
+                        ? = 'default'
+                        OR candidate.resource_class = 'default'
+                        OR candidate.resource_class = ?
+                      )
+                      AND (
                         candidate.concurrency_limit = 0
                         OR (
                             SELECT COUNT(*)
                             FROM scheduler_jobs AS active
                             WHERE active.owner_id = candidate.owner_id
                               AND active.status = ?
+                              AND active.resource_class = candidate.resource_class
                         ) < candidate.concurrency_limit
                       )
                     ORDER BY candidate.priority ASC, candidate.sequence ASC
                     LIMIT 1
                     """,
-                    (QUEUED, RUNNING),
+                    (QUEUED, resource_class, resource_class, RUNNING),
                 ).fetchone()
                 if not row:
                     connection.execute(
                         """
-                        INSERT INTO scheduler_workers(port, pid, active_prompt_id, last_heartbeat)
-                        VALUES (?, ?, NULL, ?)
+                        INSERT INTO scheduler_workers(
+                            port, pid, active_prompt_id, last_heartbeat, resource_class
+                        ) VALUES (?, ?, NULL, ?, ?)
                         ON CONFLICT(port) DO UPDATE SET
                             pid = excluded.pid,
-                            last_heartbeat = excluded.last_heartbeat
+                            last_heartbeat = excluded.last_heartbeat,
+                            resource_class = excluded.resource_class
                         """,
-                        (int(port), int(pid), now),
+                        (int(port), int(pid), now, resource_class),
                     )
                     connection.execute("COMMIT")
                     return None
@@ -312,14 +427,16 @@ class SchedulerStore:
                     return None
                 connection.execute(
                     """
-                    INSERT INTO scheduler_workers(port, pid, active_prompt_id, last_heartbeat)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO scheduler_workers(
+                        port, pid, active_prompt_id, last_heartbeat, resource_class
+                    ) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(port) DO UPDATE SET
                         pid = excluded.pid,
                         active_prompt_id = excluded.active_prompt_id,
-                        last_heartbeat = excluded.last_heartbeat
+                        last_heartbeat = excluded.last_heartbeat,
+                        resource_class = excluded.resource_class
                     """,
-                    (int(port), int(pid), row["prompt_id"], now),
+                    (int(port), int(pid), row["prompt_id"], now, resource_class),
                 )
                 connection.execute("COMMIT")
                 return self._decode_item(row["payload"]) + (row["owner_id"],)
@@ -557,11 +674,13 @@ class WorkerHeartbeat:
         port: int,
         interval_seconds: int,
         stale_seconds: int,
+        resource_class: str = "default",
     ):
         self.store = store
         self.port = int(port)
         self.interval_seconds = max(1, int(interval_seconds))
         self.stale_seconds = max(self.interval_seconds * 2, int(stale_seconds))
+        self.resource_class = str(resource_class or "default")
         self.pid = os.getpid()
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -571,7 +690,7 @@ class WorkerHeartbeat:
         )
 
     def start(self) -> None:
-        self.store.register_worker(self.port, self.pid)
+        self.store.register_worker(self.port, self.pid, self.resource_class)
         self._thread.start()
 
     def stop(self) -> None:
@@ -580,7 +699,12 @@ class WorkerHeartbeat:
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             try:
-                self.store.heartbeat(self.port, self.pid, self.stale_seconds)
+                self.store.heartbeat(
+                    self.port,
+                    self.pid,
+                    self.stale_seconds,
+                    self.resource_class,
+                )
             except Exception:
                 # The queue operations surface database failures to ComfyUI;
                 # heartbeat errors remain retryable and must not kill the worker.

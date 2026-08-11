@@ -2,11 +2,14 @@
 
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/mnt/ComfyUI}"
+APP_DIR="${APP_DIR:-/root/autodl-tmp/ComfyUI}"
 CONDA_ENV="${CONDA_ENV:-comfyui}"
 HOST="${HOST:-0.0.0.0}"
-START_PORT="${START_PORT:-8180}"
-INSTANCE_COUNT="${INSTANCE_COUNT:-30}"
+START_PORT="${START_PORT:-6006}"
+INSTANCE_COUNT="${INSTANCE_COUNT:-11}"
+GPU_COUNT="${GPU_COUNT:-2}"
+GPU_WORKER_COUNT="${GPU_WORKER_COUNT:-2}"
+GPU_WORKER_INDICES="${GPU_WORKER_INDICES:-1,3}"
 SESSION_PREFIX="${SESSION_PREFIX:-comfyui}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-10}"
@@ -23,22 +26,25 @@ Usage:
 
 TARGET can be:
   - instance index: 1, 2, 3...
-  - port: 8180, 8181, 8182...
+  - port: 6006, 6007, 6008...
   - tmux session: comfyui, comfyui2, comfyui3...
 
 Examples:
   ./manage_comfyui.sh start
-  ./manage_comfyui.sh restart 1 3 8185 comfyui7
+  ./manage_comfyui.sh restart 1 3 6010 comfyui7
   ./manage_comfyui.sh stop all
   ./manage_comfyui.sh status
-  ./manage_comfyui.sh attach 8180
+  ./manage_comfyui.sh attach 6006
   ./manage_comfyui.sh logs comfyui4
 
 Defaults:
-  APP_DIR=/mnt/ComfyUI
+  APP_DIR=/root/autodl-tmp/ComfyUI
   CONDA_ENV=comfyui
-  START_PORT=8180
-  INSTANCE_COUNT=30
+  START_PORT=6006
+  INSTANCE_COUNT=11
+  GPU_COUNT=2
+  GPU_WORKER_COUNT=2
+  GPU_WORKER_INDICES=1,3
 EOF
 }
 
@@ -148,25 +154,64 @@ kill_port() {
 
 build_launch_command() {
   local port="$1"
+  local index="$2"
+  local worker_class
+  local cuda_device=""
   local python_cmd
   local database_url="sqlite:///${APP_DIR}/user/comfyui-${port}.db"
-
-  printf -v python_cmd '%q ' \
-    "${PYTHON_BIN}" \
-    main.py \
-    --enable-assets \
-    --database-url "${database_url}" \
-    --cpu \
-    --listen "${HOST}" \
-    --port "${port}" \
+  local -a command=(
+    "${PYTHON_BIN}"
+    main.py
+    --enable-assets
+    --database-url "${database_url}"
+    --listen "${HOST}"
+    --port "${port}"
     --disable-metadata
+  )
 
-  printf 'source %q && conda activate %q && cd %q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && exec %s' \
+  if cuda_device="$(gpu_device_for_index "${index}")"; then
+    worker_class="gpu"
+  else
+    worker_class="api"
+    command+=(--cpu)
+  fi
+
+  printf -v python_cmd '%q ' "${command[@]}"
+
+  printf 'source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && exec %s' \
     "${CONDA_SH}" \
     "${CONDA_ENV}" \
     "${APP_DIR}" \
+    "${cuda_device}" \
+    "${worker_class}" \
     "${port}" \
     "${python_cmd}"
+}
+
+gpu_device_for_index() {
+  local index="$1"
+  local position=0
+  local configured_index
+  local -a gpu_indices
+  IFS=',' read -r -a gpu_indices <<< "${GPU_WORKER_INDICES}"
+  for configured_index in "${gpu_indices[@]}"; do
+    if ((configured_index == index)); then
+      echo $((position % GPU_COUNT))
+      return 0
+    fi
+    position=$((position + 1))
+  done
+  return 1
+}
+
+worker_class_for_index() {
+  local index="$1"
+  local gpu_device
+  if gpu_device="$(gpu_device_for_index "${index}")"; then
+    echo "gpu:${gpu_device}"
+  else
+    echo "api:-"
+  fi
 }
 
 index_for_target() {
@@ -238,11 +283,11 @@ start_one() {
     return 0
   fi
 
-  inner_cmd="$(build_launch_command "${port}")"
+  inner_cmd="$(build_launch_command "${port}" "${index}")"
   printf -v escaped_cmd '%q' "${inner_cmd}"
 
   tmux new-session -d -s "${session}" -c "${APP_DIR}" "bash -lc ${escaped_cmd}"
-  echo "[${session}] started on port ${port}"
+  echo "[${session}] started on port ${port} ($(worker_class_for_index "${index}"))"
 }
 
 stop_one() {
@@ -316,9 +361,11 @@ status_one() {
   local port
   local state
   local pid
+  local worker
 
   session="$(session_name_for_index "${index}")"
   port="$(port_for_index "${index}")"
+  worker="$(worker_class_for_index "${index}")"
 
   if session_exists "${session}"; then
     state="running"
@@ -328,7 +375,7 @@ status_one() {
     pid="-"
   fi
 
-  printf '%-10s %-6s %-8s %s\n' "${session}" "${port}" "${state}" "${pid}"
+  printf '%-10s %-6s %-8s %-8s %s\n' "${session}" "${port}" "${state}" "${worker}" "${pid}"
 }
 
 attach_one() {
@@ -350,8 +397,21 @@ logs_one() {
 }
 
 main() {
+  local -a configured_gpu_indices
+  local configured_gpu_index
+
   require_cmd tmux
   require_cmd bash
+
+  [[ "${GPU_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "GPU_COUNT must be a positive integer"
+  [[ "${GPU_WORKER_COUNT}" =~ ^[0-9]+$ ]] || die "GPU_WORKER_COUNT must be a non-negative integer"
+  ((GPU_WORKER_COUNT <= INSTANCE_COUNT)) || die "GPU_WORKER_COUNT cannot exceed INSTANCE_COUNT"
+  [[ "${GPU_WORKER_INDICES}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || die "GPU_WORKER_INDICES must be comma-separated instance indices"
+  IFS=',' read -r -a configured_gpu_indices <<< "${GPU_WORKER_INDICES}"
+  ((${#configured_gpu_indices[@]} == GPU_WORKER_COUNT)) || die "GPU_WORKER_COUNT must match GPU_WORKER_INDICES"
+  for configured_gpu_index in "${configured_gpu_indices[@]}"; do
+    ((configured_gpu_index <= INSTANCE_COUNT)) || die "GPU worker index exceeds INSTANCE_COUNT: ${configured_gpu_index}"
+  done
 
   [[ -d "${APP_DIR}" ]] || die "APP_DIR does not exist: ${APP_DIR}"
   CONDA_SH="$(detect_conda_sh)" || die "could not locate conda.sh; set CONDA_SH manually if needed"
@@ -366,7 +426,7 @@ main() {
       mapfile -t targets < <(expand_targets "$@")
 
       if [[ "${action}" == "status" ]]; then
-        printf '%-10s %-6s %-8s %s\n' "SESSION" "PORT" "STATE" "PID"
+        printf '%-10s %-6s %-8s %-8s %s\n' "SESSION" "PORT" "STATE" "POOL:GPU" "PID"
       fi
 
       local index

@@ -33,11 +33,13 @@ class AccessControl:
         instance_port: int = 0,
         heartbeat_seconds: int = 5,
         stale_seconds: int = 60,
+        worker_resource_class: str = "default",
     ):
         self.users_db = users_db
         self.server = server
         self.scheduler = scheduler
         self.instance_port = int(instance_port or 0)
+        self.worker_resource_class = str(worker_resource_class or "default")
         self._worker_heartbeat = None
 
         self._current_user = contextvars.ContextVar("user_id", default=None)
@@ -66,6 +68,7 @@ class AccessControl:
                 self.instance_port,
                 heartbeat_seconds,
                 stale_seconds,
+                self.worker_resource_class,
             )
             self._worker_heartbeat.start()
 
@@ -371,7 +374,9 @@ class AccessControl:
             started = time.monotonic()
             while True:
                 wrapped_item = self.scheduler.claim(
-                    self.instance_port, os.getpid()
+                    self.instance_port,
+                    os.getpid(),
+                    self.worker_resource_class,
                 )
                 if wrapped_item is not None:
                     user_id = self._queue_item_user_id(wrapped_item)
