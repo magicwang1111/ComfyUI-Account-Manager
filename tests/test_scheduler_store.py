@@ -166,6 +166,19 @@ class SchedulerStoreTests(unittest.TestCase):
         self.assertEqual("gpu", store.classify_item(tuple(gpu_item)))
         self.assertEqual("api", store.classify_item(tuple(api_item)))
 
+    def test_default_config_classifies_upscale_nodes_as_gpu(self):
+        config_path = Path(__file__).parents[1] / "config.json"
+        configured_types = json.loads(config_path.read_text(encoding="utf-8"))[
+            "gpu_node_types"
+        ]
+        store = SchedulerStore(self.database, gpu_node_types=configured_types)
+
+        for node_type in ("UpscaleModelLoader", "ImageUpscaleWithModel"):
+            with self.subTest(node_type=node_type):
+                item = list(queue_item(1, node_type))
+                item[2] = {"1": {"class_type": node_type}}
+                self.assertEqual("gpu", store.classify_item(tuple(item)))
+
     def test_workers_only_claim_jobs_from_their_resource_pool(self):
         store = SchedulerStore(self.database, gpu_node_types=["UNETLoader"])
         gpu_item = list(queue_item(1, "gpu"))

@@ -19,6 +19,8 @@
         "KSamplerAdvanced",
         "SamplerCustom",
         "SamplerCustomAdvanced",
+        "UpscaleModelLoader",
+        "ImageUpscaleWithModel",
         "MiniMaxH3TurboLoRA",
         "MiniMaxH3TurboSampler",
         "SpectrumApplyMiniMaxH3"

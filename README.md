@@ -47,6 +47,8 @@ Edit `config.json` before starting ComfyUI.
     "UNETLoader",
     "KSampler",
     "SamplerCustomAdvanced",
+    "UpscaleModelLoader",
+    "ImageUpscaleWithModel",
     "MiniMaxH3TurboSampler"
   ],
   "worker_heartbeat_seconds": 5,
