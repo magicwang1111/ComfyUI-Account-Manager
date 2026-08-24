@@ -18,7 +18,7 @@ from .users_db import UsersDB
 from .config import INSTANCE_LOG_FILE
 from .history_assets import iter_temp_references, persist_temp_assets
 from .history_store import HistoryStore
-from .scheduler_store import SchedulerStore, WorkerHeartbeat
+from .scheduler_store import SchedulerStore, WorkerHeartbeat, is_sqlite_busy
 
 
 logger = logging.getLogger("ComfyUI-Account-Manager")
@@ -374,12 +374,21 @@ class AccessControl:
         if self.scheduler:
             started = time.monotonic()
             while True:
-                wrapped_item = self.scheduler.claim(
-                    self.instance_port,
-                    os.getpid(),
-                    self.worker_resource_class,
-                    INSTANCE_LOG_FILE,
-                )
+                try:
+                    wrapped_item = self.scheduler.claim(
+                        self.instance_port,
+                        os.getpid(),
+                        self.worker_resource_class,
+                        INSTANCE_LOG_FILE,
+                    )
+                except Exception as error:
+                    if not is_sqlite_busy(error):
+                        raise
+                    logger.warning(
+                        "Scheduler database busy on port %s; retrying task claim",
+                        self.instance_port,
+                    )
+                    wrapped_item = None
                 if wrapped_item is not None:
                     user_id = self._queue_item_user_id(wrapped_item)
                     self.set_current_user_id(user_id, True)

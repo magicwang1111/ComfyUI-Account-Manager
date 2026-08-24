@@ -16,6 +16,13 @@ WORKER_LOST = "worker_lost"
 TERMINAL_STATES = (COMPLETED, FAILED, CANCELLED, WORKER_LOST)
 
 
+def is_sqlite_busy(error: BaseException) -> bool:
+    """Return whether an SQLite error is a transient writer-contention error."""
+    return isinstance(error, sqlite3.OperationalError) and any(
+        message in str(error).lower() for message in ("database is locked", "database is busy")
+    )
+
+
 class SchedulerStore:
     """A small multi-process queue shared by all ComfyUI instances."""
 

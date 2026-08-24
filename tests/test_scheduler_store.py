@@ -17,6 +17,7 @@ spec.loader.exec_module(scheduler_store)
 CANCELLED = scheduler_store.CANCELLED
 WORKER_LOST = scheduler_store.WORKER_LOST
 SchedulerStore = scheduler_store.SchedulerStore
+is_sqlite_busy = scheduler_store.is_sqlite_busy
 
 
 def queue_item(number: float, prompt_id: str, client_id: str = "") -> tuple:
@@ -32,6 +33,12 @@ class SchedulerStoreTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def test_only_transient_sqlite_contention_is_retryable(self):
+        self.assertTrue(is_sqlite_busy(sqlite3.OperationalError("database is locked")))
+        self.assertTrue(is_sqlite_busy(sqlite3.OperationalError("database is busy")))
+        self.assertFalse(is_sqlite_busy(sqlite3.OperationalError("disk I/O error")))
+        self.assertFalse(is_sqlite_busy(RuntimeError("database is locked")))
 
     def test_claims_are_unique_across_thirty_workers(self):
         for index in range(30):
