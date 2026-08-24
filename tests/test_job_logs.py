@@ -32,7 +32,9 @@ class JobLogsCliTests(unittest.TestCase):
                     error TEXT,
                     log_file TEXT,
                     log_start_offset INTEGER,
-                    log_end_offset INTEGER
+                    log_end_offset INTEGER,
+                    log_start_line INTEGER,
+                    log_end_line INTEGER
                 )
                 """
             )
@@ -40,10 +42,26 @@ class JobLogsCliTests(unittest.TestCase):
                 """
                 INSERT INTO scheduler_jobs VALUES (
                     'job-1', 'user-a', 6007, 6006, 'completed',
-                    1, 2, 3, NULL, ?, 8, 30
+                    1, 2, 3, NULL, ?, 8, 30, 2, 3
                 )
                 """,
                 (os.fspath(self.log_file),),
+            )
+            connection.execute(
+                """
+                CREATE TABLE scheduler_job_logs (
+                    prompt_id TEXT PRIMARY KEY,
+                    content BLOB,
+                    content_bytes INTEGER,
+                    truncated INTEGER,
+                    start_line INTEGER,
+                    end_line INTEGER
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO scheduler_job_logs VALUES (?, ?, ?, ?, ?, ?)",
+                ("job-1", b"stored job log\n", 15, 0, 2, 3),
             )
             connection.commit()
 
@@ -66,7 +84,7 @@ class JobLogsCliTests(unittest.TestCase):
     def test_show_prints_only_the_indexed_job_slice(self):
         result = self.run_cli("job-1")
         self.assertEqual(0, result.returncode, result.stderr.decode())
-        self.assertEqual(b"job line 1\njob line 2\n", result.stdout)
+        self.assertEqual(b"stored job log\n", result.stdout)
 
     def test_status_reports_worker_and_log_metadata(self):
         result = self.run_cli("job-1", "--status")
@@ -75,6 +93,9 @@ class JobLogsCliTests(unittest.TestCase):
         self.assertIn('"worker_port": 6006', output)
         self.assertIn('"log_start_offset": 8', output)
         self.assertIn('"log_end_offset": 30', output)
+        self.assertIn('"log_start_line": 2', output)
+        self.assertIn('"log_end_line": 3', output)
+        self.assertIn('"stored_log_bytes": 15', output)
 
 
 if __name__ == "__main__":

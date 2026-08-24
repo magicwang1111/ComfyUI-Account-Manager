@@ -457,6 +457,8 @@ class AccessControl:
             if self.scheduler:
                 status_text = getattr(status, "status_str", "success") if status else "success"
                 messages = getattr(status, "messages", []) if status else []
+                if INSTANCE_LOG_FILE:
+                    time.sleep(0.1)
                 for attempt in range(3):
                     try:
                         self.scheduler.complete(

@@ -105,6 +105,10 @@ The tmux console remains usable. When a distributed job is claimed, its worker
 port, log file, and starting byte offset are stored in `scheduler.sqlite3`; the
 ending offset is added when the job finishes. This keeps large log text out of
 SQLite while providing a durable one-to-one job/log index.
+Completed job excerpts are also stored in the separate `scheduler_job_logs`
+table inside `scheduler.sqlite3` (up to 1 MiB per job). This keeps the hot
+scheduler row small while allowing `job-logs JOB_ID` to read the saved excerpt
+directly from the database. Start/end line numbers are included in `--status`.
 
 ```bash
 # Last 200 lines for the latest run on port 6006

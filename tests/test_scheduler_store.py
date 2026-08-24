@@ -189,6 +189,7 @@ class SchedulerStoreTests(unittest.TestCase):
         running = self.store.get_job("job-with-log")
         self.assertEqual(os.path.abspath(log_path), running["log_file"])
         self.assertEqual(8, running["log_start_offset"])
+        self.assertEqual(2, running["log_start_line"])
         self.assertIsNone(running["log_end_offset"])
 
         with open(log_path, "ab") as log_file:
@@ -198,6 +199,11 @@ class SchedulerStoreTests(unittest.TestCase):
         )
         completed = self.store.get_job("job-with-log")
         self.assertEqual(19, completed["log_end_offset"])
+        self.assertEqual(3, completed["log_end_line"])
+        stored = self.store.get_job_log("job-with-log")
+        self.assertEqual(b"job output\n", stored["content"])
+        self.assertEqual(11, stored["content_bytes"])
+        self.assertEqual(0, stored["truncated"])
 
     def test_job_log_columns_are_added_to_existing_database(self):
         legacy_database = os.path.join(self.temp_dir.name, "legacy-logs.sqlite3")
@@ -239,7 +245,13 @@ class SchedulerStoreTests(unittest.TestCase):
                 ).fetchall()
             }
         self.assertTrue(
-            {"log_file", "log_start_offset", "log_end_offset"}.issubset(columns)
+            {
+                "log_file",
+                "log_start_offset",
+                "log_end_offset",
+                "log_start_line",
+                "log_end_line",
+            }.issubset(columns)
         )
 
     def test_prompt_classification_uses_configured_gpu_node_types(self):

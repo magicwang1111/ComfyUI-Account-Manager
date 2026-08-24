@@ -14,6 +14,7 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 WORKER_LOST = "worker_lost"
 TERMINAL_STATES = (COMPLETED, FAILED, CANCELLED, WORKER_LOST)
+MAX_STORED_JOB_LOG_BYTES = 1024 * 1024
 
 
 def is_sqlite_busy(error: BaseException) -> bool:
@@ -46,6 +47,8 @@ class SchedulerStore:
             str(node_type) for node_type in (gpu_node_types or []) if node_type
         }
         self.busy_timeout_ms = max(1000, int(busy_timeout_ms))
+        self._log_line_cache: dict[str, tuple[int, int]] = {}
+        self._log_line_cache_lock = threading.Lock()
         os.makedirs(os.path.dirname(os.path.abspath(self.database)), exist_ok=True)
         self._initialize()
         try:
@@ -112,6 +115,20 @@ class SchedulerStore:
                 );
                 CREATE INDEX IF NOT EXISTS scheduler_assets_owner
                     ON scheduler_assets(owner_id, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS scheduler_job_logs (
+                    prompt_id TEXT PRIMARY KEY,
+                    worker_port INTEGER,
+                    log_file TEXT NOT NULL,
+                    start_offset INTEGER NOT NULL,
+                    end_offset INTEGER NOT NULL,
+                    start_line INTEGER,
+                    end_line INTEGER,
+                    content BLOB NOT NULL,
+                    content_bytes INTEGER NOT NULL,
+                    truncated INTEGER NOT NULL DEFAULT 0,
+                    captured_at REAL NOT NULL
+                );
                 """
             )
             connection.execute("BEGIN IMMEDIATE")
@@ -134,6 +151,12 @@ class SchedulerStore:
                 )
                 self._ensure_column(
                     connection, "scheduler_jobs", "log_end_offset", "INTEGER"
+                )
+                self._ensure_column(
+                    connection, "scheduler_jobs", "log_start_line", "INTEGER"
+                )
+                self._ensure_column(
+                    connection, "scheduler_jobs", "log_end_line", "INTEGER"
                 )
                 connection.execute(
                     """
@@ -276,14 +299,14 @@ class SchedulerStore:
                         "SELECT log_file FROM scheduler_jobs WHERE prompt_id = ?",
                         (old["active_prompt_id"],),
                     ).fetchone()
-                    _, log_end_offset = self._log_position(
+                    _, log_end_offset, log_end_line = self._log_position(
                         active_job["log_file"] if active_job else ""
                     )
                     connection.execute(
                         """
                         UPDATE scheduler_jobs
                         SET status = ?, finished_at = ?, error = ?,
-                            log_end_offset = ?
+                            log_end_offset = ?, log_end_line = ?
                         WHERE prompt_id = ? AND status = ?
                         """,
                         (
@@ -291,6 +314,7 @@ class SchedulerStore:
                             now,
                             "Worker process restarted before the task completed",
                             log_end_offset,
+                            log_end_line,
                             old["active_prompt_id"],
                             RUNNING,
                         ),
@@ -352,14 +376,14 @@ class SchedulerStore:
                         "SELECT log_file FROM scheduler_jobs WHERE prompt_id = ?",
                         (prompt_id,),
                     ).fetchone()
-                    _, log_end_offset = self._log_position(
+                    _, log_end_offset, log_end_line = self._log_position(
                         active_job["log_file"] if active_job else ""
                     )
                     updated = connection.execute(
                         """
                         UPDATE scheduler_jobs
                         SET status = ?, finished_at = ?, error = ?,
-                            log_end_offset = ?
+                            log_end_offset = ?, log_end_line = ?
                         WHERE prompt_id = ? AND status = ?
                         """,
                         (
@@ -367,6 +391,7 @@ class SchedulerStore:
                             now,
                             f"Worker on port {worker['port']} stopped reporting heartbeats",
                             log_end_offset,
+                            log_end_line,
                             prompt_id,
                             RUNNING,
                         ),
@@ -383,15 +408,38 @@ class SchedulerStore:
                 raise
         return lost
 
-    @staticmethod
-    def _log_position(log_file: str) -> tuple[Optional[str], Optional[int]]:
+    def _line_at_offset(self, path: str, offset: int) -> int:
+        with self._log_line_cache_lock:
+            cached_offset, newline_count = self._log_line_cache.get(path, (0, 0))
+            if cached_offset > offset:
+                cached_offset, newline_count = 0, 0
+            try:
+                with open(path, "rb") as log:
+                    log.seek(cached_offset)
+                    remaining = offset - cached_offset
+                    while remaining:
+                        chunk = log.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        newline_count += chunk.count(b"\n")
+                        cached_offset += len(chunk)
+                        remaining -= len(chunk)
+            except OSError:
+                return 1
+            self._log_line_cache[path] = (cached_offset, newline_count)
+            return newline_count + 1
+
+    def _log_position(
+        self, log_file: str
+    ) -> tuple[Optional[str], Optional[int], Optional[int]]:
         if not log_file:
-            return None, None
+            return None, None, None
         path = os.path.abspath(os.fspath(log_file))
         try:
-            return path, os.path.getsize(path)
+            offset = os.path.getsize(path)
+            return path, offset, self._line_at_offset(path, offset)
         except OSError:
-            return path, 0
+            return path, 0, 1
 
     def claim(
         self,
@@ -403,7 +451,7 @@ class SchedulerStore:
         """Claim the first eligible job and return its ComfyUI queue tuple."""
         now = time.time()
         resource_class = str(resource_class or "default")
-        log_path, log_offset = self._log_position(log_file)
+        log_path, log_offset, log_line = self._log_position(log_file)
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -465,7 +513,8 @@ class SchedulerStore:
                     """
                     UPDATE scheduler_jobs
                     SET status = ?, worker_port = ?, started_at = ?, heartbeat_at = ?,
-                        log_file = ?, log_start_offset = ?, log_end_offset = NULL
+                        log_file = ?, log_start_offset = ?, log_end_offset = NULL,
+                        log_start_line = ?, log_end_line = NULL
                     WHERE prompt_id = ? AND status = ?
                     """,
                     (
@@ -475,6 +524,7 @@ class SchedulerStore:
                         now,
                         log_path,
                         log_offset,
+                        log_line,
                         row["prompt_id"],
                         QUEUED,
                     ),
@@ -512,7 +562,29 @@ class SchedulerStore:
     ) -> None:
         now = time.time()
         status = COMPLETED if succeeded else FAILED
-        log_path, log_offset = self._log_position(log_file)
+        log_path, log_offset, log_line = self._log_position(log_file)
+        excerpt = None
+        start_offset = None
+        start_line = None
+        if log_path and log_offset is not None:
+            with closing(self._connect()) as lookup:
+                log_row = lookup.execute(
+                    """
+                    SELECT log_start_offset, log_start_line
+                    FROM scheduler_jobs WHERE prompt_id = ?
+                    """,
+                    (prompt_id,),
+                ).fetchone()
+            if log_row and log_row["log_start_offset"] is not None:
+                start_offset = int(log_row["log_start_offset"])
+                start_line = log_row["log_start_line"]
+                byte_count = max(0, int(log_offset) - start_offset)
+                try:
+                    with open(log_path, "rb") as log:
+                        log.seek(start_offset)
+                        excerpt = log.read(min(byte_count, MAX_STORED_JOB_LOG_BYTES))
+                except OSError:
+                    excerpt = None
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -521,7 +593,7 @@ class SchedulerStore:
                     UPDATE scheduler_jobs
                     SET status = ?, finished_at = ?, error = ?,
                         log_file = COALESCE(log_file, ?),
-                        log_end_offset = ?
+                        log_end_offset = ?, log_end_line = ?
                     WHERE prompt_id = ? AND status IN (?, ?)
                     """,
                     (
@@ -530,11 +602,46 @@ class SchedulerStore:
                         error or None,
                         log_path,
                         log_offset,
+                        log_line,
                         prompt_id,
                         RUNNING,
                         WORKER_LOST,
                     ),
                 )
+                if excerpt is not None:
+                    connection.execute(
+                        """
+                        INSERT INTO scheduler_job_logs(
+                            prompt_id, worker_port, log_file,
+                            start_offset, end_offset, start_line, end_line,
+                            content, content_bytes, truncated, captured_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(prompt_id) DO UPDATE SET
+                            worker_port = excluded.worker_port,
+                            log_file = excluded.log_file,
+                            start_offset = excluded.start_offset,
+                            end_offset = excluded.end_offset,
+                            start_line = excluded.start_line,
+                            end_line = excluded.end_line,
+                            content = excluded.content,
+                            content_bytes = excluded.content_bytes,
+                            truncated = excluded.truncated,
+                            captured_at = excluded.captured_at
+                        """,
+                        (
+                            prompt_id,
+                            int(worker_port),
+                            log_path,
+                            start_offset,
+                            int(log_offset),
+                            start_line,
+                            log_line,
+                            excerpt,
+                            len(excerpt),
+                            int(byte_count > MAX_STORED_JOB_LOG_BYTES),
+                            now,
+                        ),
+                    )
                 connection.execute(
                     """
                     UPDATE scheduler_workers
@@ -547,6 +654,13 @@ class SchedulerStore:
             except Exception:
                 connection.execute("ROLLBACK")
                 raise
+
+    def get_job_log(self, prompt_id: str) -> Optional[dict]:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM scheduler_job_logs WHERE prompt_id = ?", (prompt_id,)
+            ).fetchone()
+        return dict(row) if row else None
 
     def cancel(self, prompt_id: str, owner_id: str = None, admin: bool = False) -> bool:
         with closing(self._connect()) as connection:
