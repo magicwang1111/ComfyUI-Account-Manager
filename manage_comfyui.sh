@@ -487,6 +487,8 @@ main() {
       ;;
     job-logs)
       [[ "$#" -ge 1 ]] || die "job-logs requires a JOB_ID"
+      source "${CONDA_SH}"
+      conda activate "${CONDA_ENV}"
       "${PYTHON_BIN}" "${ACCOUNT_MANAGER_DIR}/admin/job_logs.py" "$@"
       ;;
     help|-h|--help)
