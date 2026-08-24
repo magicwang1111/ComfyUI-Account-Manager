@@ -135,16 +135,21 @@ def show_api_logs(database: Path, prompt_id: str) -> int:
             rows = connection.execute(
                 "SELECT * FROM scheduler_api_logs WHERE prompt_id = ? ORDER BY sequence",
                 (prompt_id,),
-            ).fetchall()
+            )
         except sqlite3.OperationalError:
-            rows = []
-    records = []
-    for row in rows:
-        record = dict(row)
-        record["request_body"] = _body_json(record.get("request_body"))
-        record["response_body"] = _body_json(record.get("response_body"))
-        records.append(record)
-    print(json.dumps(records, ensure_ascii=False, indent=2))
+            print("[]")
+            return 0
+        print("[")
+        first = True
+        for row in rows:
+            record = dict(row)
+            record["request_body"] = _body_json(record.get("request_body"))
+            record["response_body"] = _body_json(record.get("response_body"))
+            if not first:
+                print(",")
+            print(json.dumps(record, ensure_ascii=False, indent=2), end="")
+            first = False
+        print("\n]")
     return 0
 
 

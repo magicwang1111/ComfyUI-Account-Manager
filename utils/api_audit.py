@@ -1,4 +1,5 @@
 import contextvars
+import hashlib
 import json
 import threading
 import time
@@ -30,6 +31,25 @@ _fallback_prompt_id = None
 _fallback_lock = threading.Lock()
 _recorder = None
 _installed = False
+
+MEDIA_CONTENT_TYPES = (
+    "image/",
+    "video/",
+    "audio/",
+    "application/octet-stream",
+)
+MEDIA_KEY_PARTS = (
+    "image",
+    "video",
+    "audio",
+    "base64",
+    "binary",
+    "file_data",
+    "first_frame",
+    "last_frame",
+    "mask",
+)
+LARGE_MEDIA_STRING_BYTES = 64 * 1024
 
 
 def set_current_job(prompt_id: str) -> None:
@@ -104,6 +124,92 @@ def _body(value) -> bytes | None:
     )
 
 
+def _content_type(headers) -> str:
+    if not headers:
+        return ""
+    try:
+        value = headers.get("content-type") or headers.get("Content-Type")
+    except AttributeError:
+        value = None
+        for key, item in headers:
+            if str(key).lower() == "content-type":
+                value = item
+                break
+    return str(value or "").split(";", 1)[0].strip().lower()
+
+
+def _body_reference(raw: bytes, content_type: str, reason: str) -> bytes:
+    return json.dumps(
+        {
+            "$account_manager_body_ref": {
+                "stored": False,
+                "reason": reason,
+                "content_type": content_type or None,
+                "content_bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _media_string_reference(value: str, reason: str) -> dict:
+    raw = value.encode("utf-8")
+    return {
+        "$account_manager_media_ref": {
+            "stored": False,
+            "reason": reason,
+            "encoded_bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+    }
+
+
+def _strip_embedded_media(value, key: str = ""):
+    if isinstance(value, dict):
+        return {
+            item_key: _strip_embedded_media(item, str(item_key).lower())
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_strip_embedded_media(item, key) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    lowered = value[:64].lower()
+    if lowered.startswith(("data:image/", "data:video/", "data:audio/")):
+        return _media_string_reference(value, "embedded_media_data_uri")
+    if len(value.encode("utf-8")) >= LARGE_MEDIA_STRING_BYTES and any(
+        part in key for part in MEDIA_KEY_PARTS
+    ):
+        return _media_string_reference(value, "embedded_media_field")
+    return value
+
+
+def _audit_body(value, headers=None) -> bytes | None:
+    raw = _body(value)
+    if raw is None:
+        return None
+    content_type = _content_type(headers)
+    if content_type.startswith(MEDIA_CONTENT_TYPES):
+        return _body_reference(raw, content_type, "binary_media_body")
+    if content_type == "multipart/form-data":
+        return _body_reference(raw, content_type, "multipart_body")
+    if content_type == "application/json" or (
+        not content_type and raw.lstrip().startswith((b"{", b"["))
+    ):
+        try:
+            parsed = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return raw
+        stripped = _strip_embedded_media(parsed)
+        return json.dumps(
+            stripped, ensure_ascii=False, separators=(",", ":"), default=str
+        ).encode("utf-8")
+    return raw
+
+
 def _record(client, request, response=None, error: BaseException = None) -> None:
     prompt_id = current_job()
     if not prompt_id or _recorder is None:
@@ -112,9 +218,12 @@ def _record(client, request, response=None, error: BaseException = None) -> None
         response_body = None
         if response is not None:
             try:
-                response_body = _body(response.content)
+                response_body = _audit_body(response.content, response.headers)
             except Exception:
-                response_body = _body(getattr(response, "_content", None))
+                response_body = _audit_body(
+                    getattr(response, "_content", None),
+                    getattr(response, "headers", None),
+                )
         _recorder(
             prompt_id=prompt_id,
             recorded_at=time.time(),
@@ -122,7 +231,10 @@ def _record(client, request, response=None, error: BaseException = None) -> None
             method=str(getattr(request, "method", "") or ""),
             url=_redact_url(getattr(request, "url", "")),
             request_headers=_headers(getattr(request, "headers", None)),
-            request_body=_body(getattr(request, "body", None) or getattr(request, "content", None)),
+            request_body=_audit_body(
+                getattr(request, "body", None) or getattr(request, "content", None),
+                getattr(request, "headers", None),
+            ),
             response_status=(getattr(response, "status_code", None) if response is not None else None),
             response_headers=_headers(getattr(response, "headers", None)),
             response_body=response_body,
