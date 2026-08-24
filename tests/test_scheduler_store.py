@@ -133,6 +133,26 @@ class SchedulerStoreTests(unittest.TestCase):
         self.store.register_worker(8183, 402)
         self.assertIsNone(self.store.claim(8183, 402))
 
+    def test_stale_worker_closes_the_job_log_range(self):
+        log_path = os.path.join(self.temp_dir.name, "lost-worker.log")
+        with open(log_path, "wb") as log_file:
+            log_file.write(b"startup\n")
+        self.store.enqueue(queue_item(1, "lost-with-log"), "user-a", 8180)
+        self.store.register_worker(8181, 400)
+        self.store.claim(8181, 400, log_file=log_path)
+        with open(log_path, "ab") as log_file:
+            log_file.write(b"partial output\n")
+
+        with closing(self.store._connect()) as connection:
+            connection.execute(
+                "UPDATE scheduler_workers SET last_heartbeat = ? WHERE port = 8181",
+                (time.time() - 120,),
+            )
+        self.store.heartbeat(8182, 401, stale_seconds=60)
+        job = self.store.get_job("lost-with-log")
+        self.assertEqual(WORKER_LOST, job["status"])
+        self.assertEqual(os.path.getsize(log_path), job["log_end_offset"])
+
     def test_client_ingress_uses_latest_submission(self):
         self.store.enqueue(queue_item(1, "a", "client-1"), "user-a", 8180)
         self.store.enqueue(queue_item(2, "b", "client-1"), "user-a", 8189)
@@ -149,6 +169,71 @@ class SchedulerStoreTests(unittest.TestCase):
         row = self.store.get_asset("asset-1")
         self.assertEqual("user-a", row["owner_id"])
         self.assertEqual(8187, row["worker_port"])
+
+    def test_job_log_offsets_are_recorded_at_claim_and_completion(self):
+        log_path = os.path.join(self.temp_dir.name, "6006.log")
+        with open(log_path, "wb") as log_file:
+            log_file.write(b"startup\n")
+
+        self.store.enqueue(queue_item(1, "job-with-log"), "user-a", 8180)
+        self.store.register_worker(6006, 123)
+        claimed = self.store.claim(6006, 123, log_file=log_path)
+        self.assertEqual("job-with-log", claimed[1])
+        running = self.store.get_job("job-with-log")
+        self.assertEqual(os.path.abspath(log_path), running["log_file"])
+        self.assertEqual(8, running["log_start_offset"])
+        self.assertIsNone(running["log_end_offset"])
+
+        with open(log_path, "ab") as log_file:
+            log_file.write(b"job output\n")
+        self.store.complete(
+            "job-with-log", 6006, succeeded=True, log_file=log_path
+        )
+        completed = self.store.get_job("job-with-log")
+        self.assertEqual(19, completed["log_end_offset"])
+
+    def test_job_log_columns_are_added_to_existing_database(self):
+        legacy_database = os.path.join(self.temp_dir.name, "legacy-logs.sqlite3")
+        with closing(sqlite3.connect(legacy_database)) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE scheduler_jobs (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prompt_id TEXT NOT NULL UNIQUE,
+                    owner_id TEXT NOT NULL,
+                    client_id TEXT,
+                    ingress_port INTEGER,
+                    worker_port INTEGER,
+                    priority REAL NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    concurrency_limit INTEGER NOT NULL,
+                    submitted_at REAL NOT NULL,
+                    started_at REAL,
+                    finished_at REAL,
+                    heartbeat_at REAL,
+                    error TEXT
+                );
+                CREATE TABLE scheduler_workers (
+                    port INTEGER PRIMARY KEY,
+                    pid INTEGER NOT NULL,
+                    active_prompt_id TEXT,
+                    last_heartbeat REAL NOT NULL
+                );
+                """
+            )
+
+        migrated = SchedulerStore(legacy_database)
+        with closing(migrated._connect()) as connection:
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(scheduler_jobs)"
+                ).fetchall()
+            }
+        self.assertTrue(
+            {"log_file", "log_start_offset", "log_end_offset"}.issubset(columns)
+        )
 
     def test_prompt_classification_uses_configured_gpu_node_types(self):
         store = SchedulerStore(

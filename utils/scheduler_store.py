@@ -121,6 +121,13 @@ class SchedulerStore:
                     "resource_class",
                     "TEXT NOT NULL DEFAULT 'default'",
                 )
+                self._ensure_column(connection, "scheduler_jobs", "log_file", "TEXT")
+                self._ensure_column(
+                    connection, "scheduler_jobs", "log_start_offset", "INTEGER"
+                )
+                self._ensure_column(
+                    connection, "scheduler_jobs", "log_end_offset", "INTEGER"
+                )
                 connection.execute(
                     """
                     CREATE INDEX IF NOT EXISTS scheduler_jobs_resource_status
@@ -258,16 +265,25 @@ class SchedulerStore:
                     (int(port),),
                 ).fetchone()
                 if old and old["pid"] != int(pid) and old["active_prompt_id"]:
+                    active_job = connection.execute(
+                        "SELECT log_file FROM scheduler_jobs WHERE prompt_id = ?",
+                        (old["active_prompt_id"],),
+                    ).fetchone()
+                    _, log_end_offset = self._log_position(
+                        active_job["log_file"] if active_job else ""
+                    )
                     connection.execute(
                         """
                         UPDATE scheduler_jobs
-                        SET status = ?, finished_at = ?, error = ?
+                        SET status = ?, finished_at = ?, error = ?,
+                            log_end_offset = ?
                         WHERE prompt_id = ? AND status = ?
                         """,
                         (
                             WORKER_LOST,
                             now,
                             "Worker process restarted before the task completed",
+                            log_end_offset,
                             old["active_prompt_id"],
                             RUNNING,
                         ),
@@ -325,16 +341,25 @@ class SchedulerStore:
                 ).fetchall()
                 for worker in stale:
                     prompt_id = worker["active_prompt_id"]
+                    active_job = connection.execute(
+                        "SELECT log_file FROM scheduler_jobs WHERE prompt_id = ?",
+                        (prompt_id,),
+                    ).fetchone()
+                    _, log_end_offset = self._log_position(
+                        active_job["log_file"] if active_job else ""
+                    )
                     updated = connection.execute(
                         """
                         UPDATE scheduler_jobs
-                        SET status = ?, finished_at = ?, error = ?
+                        SET status = ?, finished_at = ?, error = ?,
+                            log_end_offset = ?
                         WHERE prompt_id = ? AND status = ?
                         """,
                         (
                             WORKER_LOST,
                             now,
                             f"Worker on port {worker['port']} stopped reporting heartbeats",
+                            log_end_offset,
                             prompt_id,
                             RUNNING,
                         ),
@@ -351,12 +376,27 @@ class SchedulerStore:
                 raise
         return lost
 
+    @staticmethod
+    def _log_position(log_file: str) -> tuple[Optional[str], Optional[int]]:
+        if not log_file:
+            return None, None
+        path = os.path.abspath(os.fspath(log_file))
+        try:
+            return path, os.path.getsize(path)
+        except OSError:
+            return path, 0
+
     def claim(
-        self, port: int, pid: int, resource_class: str = "default"
+        self,
+        port: int,
+        pid: int,
+        resource_class: str = "default",
+        log_file: str = "",
     ) -> Optional[tuple]:
         """Claim the first eligible job and return its ComfyUI queue tuple."""
         now = time.time()
         resource_class = str(resource_class or "default")
+        log_path, log_offset = self._log_position(log_file)
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -417,10 +457,20 @@ class SchedulerStore:
                 updated = connection.execute(
                     """
                     UPDATE scheduler_jobs
-                    SET status = ?, worker_port = ?, started_at = ?, heartbeat_at = ?
+                    SET status = ?, worker_port = ?, started_at = ?, heartbeat_at = ?,
+                        log_file = ?, log_start_offset = ?, log_end_offset = NULL
                     WHERE prompt_id = ? AND status = ?
                     """,
-                    (RUNNING, int(port), now, now, row["prompt_id"], QUEUED),
+                    (
+                        RUNNING,
+                        int(port),
+                        now,
+                        now,
+                        log_path,
+                        log_offset,
+                        row["prompt_id"],
+                        QUEUED,
+                    ),
                 ).rowcount
                 if updated != 1:
                     connection.execute("ROLLBACK")
@@ -451,19 +501,32 @@ class SchedulerStore:
         worker_port: int,
         succeeded: bool,
         error: str = "",
+        log_file: str = "",
     ) -> None:
         now = time.time()
         status = COMPLETED if succeeded else FAILED
+        log_path, log_offset = self._log_position(log_file)
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
                     """
                     UPDATE scheduler_jobs
-                    SET status = ?, finished_at = ?, error = ?
+                    SET status = ?, finished_at = ?, error = ?,
+                        log_file = COALESCE(log_file, ?),
+                        log_end_offset = ?
                     WHERE prompt_id = ? AND status IN (?, ?)
                     """,
-                    (status, now, error or None, prompt_id, RUNNING, WORKER_LOST),
+                    (
+                        status,
+                        now,
+                        error or None,
+                        log_path,
+                        log_offset,
+                        prompt_id,
+                        RUNNING,
+                        WORKER_LOST,
+                    ),
                 )
                 connection.execute(
                     """

@@ -99,6 +99,34 @@ and the remaining 40 use `--cpu` for API workflows. Override `GPU_COUNT`,
 keeps the queue, history, ownership metadata, and cross-worker event routing in
 shared plugin-managed storage.
 
+Every instance started by `manage_comfyui.sh` also streams stdout and stderr to
+`logs/instances/<port>/<startup-time>.log` inside the Account Manager directory.
+The tmux console remains usable. When a distributed job is claimed, its worker
+port, log file, and starting byte offset are stored in `scheduler.sqlite3`; the
+ending offset is added when the job finishes. This keeps large log text out of
+SQLite while providing a durable one-to-one job/log index.
+
+```bash
+# Last 200 lines for the latest run on port 6006
+./manage_comfyui.sh logs 6006
+
+# Follow an instance in real time
+./manage_comfyui.sh logs --follow 6006
+
+# Show only the log bytes associated with one job
+./manage_comfyui.sh job-logs cc8f0bef-6783-4367-a7bb-776c6f90ec8d
+
+# Follow that job until it reaches a terminal state
+./manage_comfyui.sh job-logs --follow cc8f0bef-6783-4367-a7bb-776c6f90ec8d
+
+# Inspect its status, ports, file, and byte offsets
+./manage_comfyui.sh job-logs --status cc8f0bef-6783-4367-a7bb-776c6f90ec8d
+```
+
+Jobs submitted before this version have no byte-offset metadata. Their port and
+time range remain available in the existing scheduler row, but cannot be
+retroactively sliced with byte-level accuracy.
+
 Completed generation history is persisted in `history.sqlite3` and restored when ComfyUI restarts. The history database keeps the same 10,000-item limit as ComfyUI's in-memory history.
 
 Temporary preview images, videos, and audio referenced by completed history are linked into the user's persistent output folder and registered in ComfyUI's asset database before the history entry is saved. This keeps Job Queue previews and Media Assets available after refreshes and restarts.

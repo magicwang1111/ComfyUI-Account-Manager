@@ -98,6 +98,7 @@ INSTANCE_PORT = _runtime_port()
 WORKER_RESOURCE_CLASS = (
     os.getenv("ACCOUNT_MANAGER_WORKER_CLASS", "default").strip().lower() or "default"
 )
+INSTANCE_LOG_FILE = os.getenv("ACCOUNT_MANAGER_INSTANCE_LOG", "").strip()
 
 WEB_DIR = os.path.join(EXT_PATH, "account-manager-web")
 HTML_DIR = WEB_DIR

@@ -15,6 +15,7 @@ from server import PromptServer
 from execution import PromptQueue, MAXIMUM_HISTORY_SIZE
 
 from .users_db import UsersDB
+from .config import INSTANCE_LOG_FILE
 from .history_assets import iter_temp_references, persist_temp_assets
 from .history_store import HistoryStore
 from .scheduler_store import SchedulerStore, WorkerHeartbeat
@@ -377,6 +378,7 @@ class AccessControl:
                     self.instance_port,
                     os.getpid(),
                     self.worker_resource_class,
+                    INSTANCE_LOG_FILE,
                 )
                 if wrapped_item is not None:
                     user_id = self._queue_item_user_id(wrapped_item)
@@ -453,6 +455,7 @@ class AccessControl:
                             self.instance_port,
                             succeeded=status_text == "success",
                             error="\n".join(str(message) for message in messages),
+                            log_file=INSTANCE_LOG_FILE,
                         )
                         break
                     except Exception:

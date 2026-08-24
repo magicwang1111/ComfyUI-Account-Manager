@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 APP_DIR="${APP_DIR:-/root/autodl-tmp/ComfyUI}"
 CONDA_ENV="${CONDA_ENV:-comfyui}"
@@ -13,6 +14,8 @@ GPU_WORKER_INDICES="${GPU_WORKER_INDICES:-1,3}"
 SESSION_PREFIX="${SESSION_PREFIX:-comfyui}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-10}"
+ACCOUNT_MANAGER_DIR="${ACCOUNT_MANAGER_DIR:-${APP_DIR}/custom_nodes/ComfyUI-Account-Manager}"
+INSTANCE_LOG_DIR="${INSTANCE_LOG_DIR:-${ACCOUNT_MANAGER_DIR}/logs/instances}"
 
 usage() {
   cat <<'EOF'
@@ -22,7 +25,8 @@ Usage:
   ./manage_comfyui.sh restart [all|TARGET...]
   ./manage_comfyui.sh status [all|TARGET...]
   ./manage_comfyui.sh attach TARGET
-  ./manage_comfyui.sh logs TARGET
+  ./manage_comfyui.sh logs [-f|--follow] TARGET
+  ./manage_comfyui.sh job-logs [-f|--follow|--status] JOB_ID
 
 TARGET can be:
   - instance index: 1, 2, 3...
@@ -36,6 +40,8 @@ Examples:
   ./manage_comfyui.sh status
   ./manage_comfyui.sh attach 6006
   ./manage_comfyui.sh logs comfyui4
+  ./manage_comfyui.sh logs --follow 6006
+  ./manage_comfyui.sh job-logs cc8f0bef-6783-4367-a7bb-776c6f90ec8d
 
 Defaults:
   APP_DIR=/root/autodl-tmp/ComfyUI
@@ -155,6 +161,7 @@ kill_port() {
 build_launch_command() {
   local port="$1"
   local index="$2"
+  local log_file="$3"
   local worker_class
   local cuda_device=""
   local python_cmd
@@ -179,14 +186,16 @@ build_launch_command() {
 
   printf -v python_cmd '%q ' "${command[@]}"
 
-  printf 'source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && exec %s' \
+  printf 'source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && export ACCOUNT_MANAGER_INSTANCE_LOG=%q && export PYTHONUNBUFFERED=1 && set -o pipefail && %s 2>&1 | tee -a %q' \
     "${CONDA_SH}" \
     "${CONDA_ENV}" \
     "${APP_DIR}" \
     "${cuda_device}" \
     "${worker_class}" \
     "${port}" \
-    "${python_cmd}"
+    "${log_file}" \
+    "${python_cmd}" \
+    "${log_file}"
 }
 
 gpu_device_for_index() {
@@ -270,6 +279,7 @@ start_one() {
   local port
   local inner_cmd
   local escaped_cmd
+  local log_file
 
   session="$(session_name_for_index "${index}")"
   port="$(port_for_index "${index}")"
@@ -284,7 +294,9 @@ start_one() {
     return 0
   fi
 
-  inner_cmd="$(build_launch_command "${port}" "${index}")"
+  mkdir -p "${INSTANCE_LOG_DIR}/${port}"
+  log_file="${INSTANCE_LOG_DIR}/${port}/$(date -u +%Y%m%dT%H%M%S%NZ).log"
+  inner_cmd="$(build_launch_command "${port}" "${index}" "${log_file}")"
   printf -v escaped_cmd '%q' "${inner_cmd}"
 
   tmux new-session -d -s "${session}" -c "${APP_DIR}" "bash -lc ${escaped_cmd}"
@@ -388,13 +400,28 @@ attach_one() {
   exec tmux attach -t "${session}"
 }
 
+latest_log_for_index() {
+  local index="$1"
+  local port
+  local log_file
+
+  port="$(port_for_index "${index}")"
+  log_file="$(find "${INSTANCE_LOG_DIR}/${port}" -maxdepth 1 -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)"
+  [[ -n "${log_file}" ]] || return 1
+  echo "${log_file}"
+}
+
 logs_one() {
   local index="$1"
-  local session
+  local follow="${2:-false}"
+  local log_file
 
-  session="$(session_name_for_index "${index}")"
-  session_exists "${session}" || die "session not running: ${session}"
-  tmux capture-pane -p -t "${session}:0" -S -200
+  log_file="$(latest_log_for_index "${index}")" || die "no saved log for target: ${index}"
+  if [[ "${follow}" == "true" ]]; then
+    tail -n 200 -F "${log_file}"
+  else
+    tail -n 200 "${log_file}"
+  fi
 }
 
 main() {
@@ -403,6 +430,7 @@ main() {
 
   require_cmd tmux
   require_cmd bash
+  require_cmd tee
 
   [[ "${GPU_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "GPU_COUNT must be a positive integer"
   [[ "${GPU_WORKER_COUNT}" =~ ^[0-9]+$ ]] || die "GPU_WORKER_COUNT must be a non-negative integer"
@@ -440,15 +468,26 @@ main() {
         esac
       done
       ;;
-    attach|logs)
-      [[ "$#" -eq 1 ]] || die "${action} requires exactly one TARGET"
+    attach)
+      [[ "$#" -eq 1 ]] || die "attach requires exactly one TARGET"
       local index
       index="$(index_for_target "$1")" || die "unknown target: $1"
-      if [[ "${action}" == "attach" ]]; then
-        attach_one "${index}"
-      else
-        logs_one "${index}"
+      attach_one "${index}"
+      ;;
+    logs)
+      local follow="false"
+      if [[ "${1:-}" == "-f" || "${1:-}" == "--follow" ]]; then
+        follow="true"
+        shift
       fi
+      [[ "$#" -eq 1 ]] || die "logs requires exactly one TARGET"
+      local index
+      index="$(index_for_target "$1")" || die "unknown target: $1"
+      logs_one "${index}" "${follow}"
+      ;;
+    job-logs)
+      [[ "$#" -ge 1 ]] || die "job-logs requires a JOB_ID"
+      "${PYTHON_BIN}" "${ACCOUNT_MANAGER_DIR}/admin/job_logs.py" "$@"
       ;;
     help|-h|--help)
       usage
