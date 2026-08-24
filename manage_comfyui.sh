@@ -10,7 +10,7 @@ START_PORT="${START_PORT:-6006}"
 INSTANCE_COUNT="${INSTANCE_COUNT:-42}"
 GPU_COUNT="${GPU_COUNT:-2}"
 GPU_WORKER_COUNT="${GPU_WORKER_COUNT:-2}"
-GPU_WORKER_INDICES="${GPU_WORKER_INDICES:-1,3}"
+GPU_WORKER_INDICES="${GPU_WORKER_INDICES-1,3}"
 SESSION_PREFIX="${SESSION_PREFIX:-comfyui}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-10}"
@@ -436,9 +436,14 @@ main() {
   [[ "${GPU_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "GPU_COUNT must be a positive integer"
   [[ "${GPU_WORKER_COUNT}" =~ ^[0-9]+$ ]] || die "GPU_WORKER_COUNT must be a non-negative integer"
   ((GPU_WORKER_COUNT <= INSTANCE_COUNT)) || die "GPU_WORKER_COUNT cannot exceed INSTANCE_COUNT"
-  [[ "${GPU_WORKER_INDICES}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || die "GPU_WORKER_INDICES must be comma-separated instance indices"
-  IFS=',' read -r -a configured_gpu_indices <<< "${GPU_WORKER_INDICES}"
-  ((${#configured_gpu_indices[@]} == GPU_WORKER_COUNT)) || die "GPU_WORKER_COUNT must match GPU_WORKER_INDICES"
+  if ((GPU_WORKER_COUNT == 0)); then
+    [[ -z "${GPU_WORKER_INDICES}" ]] || die "GPU_WORKER_INDICES must be empty when GPU_WORKER_COUNT is 0"
+    configured_gpu_indices=()
+  else
+    [[ "${GPU_WORKER_INDICES}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || die "GPU_WORKER_INDICES must be comma-separated instance indices"
+    IFS=',' read -r -a configured_gpu_indices <<< "${GPU_WORKER_INDICES}"
+    ((${#configured_gpu_indices[@]} == GPU_WORKER_COUNT)) || die "GPU_WORKER_COUNT must match GPU_WORKER_INDICES"
+  fi
   for configured_gpu_index in "${configured_gpu_indices[@]}"; do
     ((configured_gpu_index <= INSTANCE_COUNT)) || die "GPU worker index exceeds INSTANCE_COUNT: ${configured_gpu_index}"
   done
