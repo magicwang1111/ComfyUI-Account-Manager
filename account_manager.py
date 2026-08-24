@@ -6,6 +6,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .utils import *
+from .utils.api_audit import install_api_audit
 
 instance = PromptServer.instance
 app = instance.app
@@ -28,6 +29,7 @@ if DISTRIBUTED_QUEUE_ENABLED:
         gpu_node_types=GPU_NODE_TYPES,
     )
     internal_signer = InternalSigner(SCHEDULER_SECRET_FILE)
+    install_api_audit(scheduler.record_api_call)
 
 access_control = AccessControl(
     users_db,

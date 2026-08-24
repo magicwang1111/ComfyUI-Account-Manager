@@ -19,6 +19,7 @@ from .config import INSTANCE_LOG_FILE
 from .history_assets import iter_temp_references, persist_temp_assets
 from .history_store import HistoryStore
 from .scheduler_store import SchedulerStore, WorkerHeartbeat, is_sqlite_busy
+from .api_audit import clear_current_job, set_current_job
 
 
 logger = logging.getLogger("ComfyUI-Account-Manager")
@@ -392,6 +393,7 @@ class AccessControl:
                 if wrapped_item is not None:
                     user_id = self._queue_item_user_id(wrapped_item)
                     self.set_current_user_id(user_id, True)
+                    set_current_job(wrapped_item[1])
                     with self.__prompt_queue.mutex:
                         item_id = self.__prompt_queue.task_counter
                         self.__prompt_queue.currently_running[item_id] = copy.deepcopy(
@@ -458,7 +460,7 @@ class AccessControl:
                 status_text = getattr(status, "status_str", "success") if status else "success"
                 messages = getattr(status, "messages", []) if status else []
                 if INSTANCE_LOG_FILE:
-                    time.sleep(0.1)
+                    time.sleep(0.5)
                 for attempt in range(3):
                     try:
                         self.scheduler.complete(
@@ -476,6 +478,7 @@ class AccessControl:
                             )
                         else:
                             time.sleep(0.2 * (attempt + 1))
+                clear_current_job(prompt[1])
             self.server.queue_updated()
 
     def _index_history_assets(self, prompt_id: str, user_id: str) -> None:

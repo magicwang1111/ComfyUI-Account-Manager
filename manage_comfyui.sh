@@ -26,7 +26,7 @@ Usage:
   ./manage_comfyui.sh status [all|TARGET...]
   ./manage_comfyui.sh attach TARGET
   ./manage_comfyui.sh logs [-f|--follow] TARGET
-  ./manage_comfyui.sh job-logs [-f|--follow|--status] JOB_ID
+  ./manage_comfyui.sh job-logs [-f|--follow|--status|--api] JOB_ID
 
 TARGET can be:
   - instance index: 1, 2, 3...
@@ -42,6 +42,7 @@ Examples:
   ./manage_comfyui.sh logs comfyui4
   ./manage_comfyui.sh logs --follow 6006
   ./manage_comfyui.sh job-logs cc8f0bef-6783-4367-a7bb-776c6f90ec8d
+  ./manage_comfyui.sh job-logs cc8f0bef-6783-4367-a7bb-776c6f90ec8d --api
 
 Defaults:
   APP_DIR=/root/autodl-tmp/ComfyUI

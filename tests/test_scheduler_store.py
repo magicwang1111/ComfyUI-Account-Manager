@@ -205,6 +205,47 @@ class SchedulerStoreTests(unittest.TestCase):
         self.assertEqual(11, stored["content_bytes"])
         self.assertEqual(0, stored["truncated"])
 
+    def test_completed_job_log_is_stored_without_truncation(self):
+        log_path = os.path.join(self.temp_dir.name, "large.log")
+        with open(log_path, "wb") as log_file:
+            log_file.write(b"startup\n")
+
+        self.store.enqueue(queue_item(1, "large-log"), "user-a", 8180)
+        self.store.register_worker(6006, 123)
+        self.store.claim(6006, 123, log_file=log_path)
+        original = b"api-record\n" * 100000
+        with open(log_path, "ab") as log_file:
+            log_file.write(original)
+
+        self.store.complete("large-log", 6006, succeeded=True, log_file=log_path)
+
+        stored = self.store.get_job_log("large-log")
+        self.assertEqual(original, stored["content"])
+        self.assertEqual(len(original), stored["content_bytes"])
+        self.assertEqual(0, stored["truncated"])
+
+    def test_api_records_are_stored_in_order_without_body_truncation(self):
+        body = b'{"task_id":"task-1","payload":"' + (b"x" * 1100000) + b'"}'
+        for status in (201, 200):
+            self.store.record_api_call(
+                prompt_id="api-job",
+                recorded_at=time.time(),
+                client="httpx",
+                method="POST" if status == 201 else "GET",
+                url="https://api.example/tasks",
+                request_headers="{}",
+                request_body=body,
+                response_status=status,
+                response_headers='{"content-type":"application/json"}',
+                response_body=body,
+                error=None,
+            )
+
+        records = self.store.get_api_logs("api-job")
+        self.assertEqual([201, 200], [record["response_status"] for record in records])
+        self.assertEqual(body, records[0]["request_body"])
+        self.assertEqual(body, records[1]["response_body"])
+
     def test_job_log_columns_are_added_to_existing_database(self):
         legacy_database = os.path.join(self.temp_dir.name, "legacy-logs.sqlite3")
         with closing(sqlite3.connect(legacy_database)) as connection:

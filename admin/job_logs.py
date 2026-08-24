@@ -2,6 +2,7 @@
 """Inspect or follow the instance-log slice associated with a scheduler job."""
 
 import argparse
+import base64
 import json
 import os
 import sqlite3
@@ -68,6 +69,13 @@ def read_job(database: Path, prompt_id: str) -> dict | None:
             if stored:
                 job["log_start_line"] = stored["start_line"]
                 job["log_end_line"] = stored["end_line"]
+            try:
+                job["api_record_count"] = connection.execute(
+                    "SELECT COUNT(*) FROM scheduler_api_logs WHERE prompt_id = ?",
+                    (prompt_id,),
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                job["api_record_count"] = 0
     return job
 
 
@@ -100,9 +108,44 @@ def print_status(job: dict) -> None:
         "log_end_line",
         "stored_log_bytes",
         "stored_log_truncated",
+        "api_record_count",
         "error",
     )
     print(json.dumps({key: job.get(key) for key in fields}, ensure_ascii=False, indent=2))
+
+
+def _body_json(value):
+    if value is None:
+        return None
+    raw = bytes(value)
+    try:
+        return {"encoding": "utf-8", "data": raw.decode("utf-8")}
+    except UnicodeDecodeError:
+        return {"encoding": "base64", "data": base64.b64encode(raw).decode("ascii")}
+
+
+def show_api_logs(database: Path, prompt_id: str) -> int:
+    job = read_job(database, prompt_id)
+    if not job:
+        print(f"job not found: {prompt_id}", file=sys.stderr)
+        return 2
+    with closing(sqlite3.connect(database)) as connection:
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(
+                "SELECT * FROM scheduler_api_logs WHERE prompt_id = ? ORDER BY sequence",
+                (prompt_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    records = []
+    for row in rows:
+        record = dict(row)
+        record["request_body"] = _body_json(record.get("request_body"))
+        record["response_body"] = _body_json(record.get("response_body"))
+        records.append(record)
+    print(json.dumps(records, ensure_ascii=False, indent=2))
+    return 0
 
 
 def copy_available(job: dict, position: int, output) -> int:
@@ -240,7 +283,7 @@ def backfill_lines(database: Path) -> int:
             byte_count = max(0, int(row["log_end_offset"]) - int(row["log_start_offset"]))
             with path.open("rb") as log:
                 log.seek(int(row["log_start_offset"]))
-                content = log.read(min(byte_count, 1024 * 1024))
+                content = log.read(byte_count)
             connection.execute(
                 """
                 INSERT INTO scheduler_job_logs(
@@ -260,7 +303,7 @@ def backfill_lines(database: Path) -> int:
                     row["prompt_id"], row["worker_port"], str(path),
                     row["log_start_offset"], row["log_end_offset"],
                     start_line, end_line, content, len(content),
-                    int(byte_count > 1024 * 1024),
+                    0,
                 ),
             )
             updated += 1
@@ -277,6 +320,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-f", "--follow", action="store_true", help="follow in real time")
     parser.add_argument(
         "--status", action="store_true", help="print job/log metadata as JSON"
+    )
+    parser.add_argument(
+        "--api", action="store_true", help="print every captured API request and response"
     )
     parser.add_argument(
         "--database",
@@ -307,6 +353,8 @@ def main() -> int:
                 return 2
             print_status(job)
             return 0
+        if args.api:
+            return show_api_logs(args.database, args.prompt_id)
         return show_job(args.database, args.prompt_id, args.follow)
     except (FileNotFoundError, RuntimeError, sqlite3.Error) as error:
         print(str(error), file=sys.stderr)

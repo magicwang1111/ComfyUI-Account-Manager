@@ -14,7 +14,6 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 WORKER_LOST = "worker_lost"
 TERMINAL_STATES = (COMPLETED, FAILED, CANCELLED, WORKER_LOST)
-MAX_STORED_JOB_LOG_BYTES = 1024 * 1024
 
 
 def is_sqlite_busy(error: BaseException) -> bool:
@@ -129,6 +128,23 @@ class SchedulerStore:
                     truncated INTEGER NOT NULL DEFAULT 0,
                     captured_at REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS scheduler_api_logs (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prompt_id TEXT NOT NULL,
+                    recorded_at REAL NOT NULL,
+                    client TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    request_headers TEXT NOT NULL,
+                    request_body BLOB,
+                    response_status INTEGER,
+                    response_headers TEXT NOT NULL,
+                    response_body BLOB,
+                    error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS scheduler_api_logs_prompt
+                    ON scheduler_api_logs(prompt_id, sequence);
                 """
             )
             connection.execute("BEGIN IMMEDIATE")
@@ -582,7 +598,7 @@ class SchedulerStore:
                 try:
                     with open(log_path, "rb") as log:
                         log.seek(start_offset)
-                        excerpt = log.read(min(byte_count, MAX_STORED_JOB_LOG_BYTES))
+                        excerpt = log.read(byte_count)
                 except OSError:
                     excerpt = None
         with closing(self._connect()) as connection:
@@ -638,7 +654,7 @@ class SchedulerStore:
                             log_line,
                             excerpt,
                             len(excerpt),
-                            int(byte_count > MAX_STORED_JOB_LOG_BYTES),
+                            0,
                             now,
                         ),
                     )
@@ -661,6 +677,39 @@ class SchedulerStore:
                 "SELECT * FROM scheduler_job_logs WHERE prompt_id = ?", (prompt_id,)
             ).fetchone()
         return dict(row) if row else None
+
+    def record_api_call(self, **record) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO scheduler_api_logs(
+                    prompt_id, recorded_at, client, method, url,
+                    request_headers, request_body, response_status,
+                    response_headers, response_body, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record["prompt_id"],
+                    record["recorded_at"],
+                    record["client"],
+                    record["method"],
+                    record["url"],
+                    record["request_headers"],
+                    record.get("request_body"),
+                    record.get("response_status"),
+                    record["response_headers"],
+                    record.get("response_body"),
+                    record.get("error"),
+                ),
+            )
+
+    def get_api_logs(self, prompt_id: str) -> list[dict]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM scheduler_api_logs WHERE prompt_id = ? ORDER BY sequence",
+                (prompt_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def cancel(self, prompt_id: str, owner_id: str = None, admin: bool = False) -> bool:
         with closing(self._connect()) as connection:
