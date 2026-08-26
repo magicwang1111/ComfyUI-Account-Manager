@@ -18,10 +18,10 @@ Goumee-ComfyUI-Server-Data/public/servers/<server_id>/YYYY/MM/DD/<prompt_id>/<or
 每个任务唯一的 gzip JSON 清单写入私有前缀：
 
 ```text
-Goumee-ComfyUI-Server-Data/private/jobs/<prompt_id>/manifest.json
+Goumee-ComfyUI-Server-Data/private/jobs/<prompt_id>/manifest.json.gz
 ```
 
-manifest 对象使用 `Content-Type: application/json`、`Content-Encoding: gzip`、`Cache-Control: no-store` 和 private object ACL。数据库只永久保存 `oss://bucket/key`，不保存会过期的签名 URL。
+manifest 对象使用 `Content-Type: application/gzip`、`Cache-Control: no-store` 和 private object ACL，不设置 `Content-Encoding`。从 OSS 控制台下载后会明确得到 `manifest.json.gz`；解压后是带两空格缩进和换行的 UTF-8 `manifest.json`。数据库只永久保存 `oss://bucket/key`，不保存会过期的签名 URL。
 
 ## 2. 安全前置条件
 
@@ -215,7 +215,7 @@ SQLite BLOB 始终使用带原始类型、字节数、SHA-256 和 Base64 的 typ
 1. public 媒体匿名 GET 返回 200；
 2. private manifest 匿名 GET 返回 403；
 3. 使用授权 SDK 或 `ossutil` 能读取 private manifest；
-4. 根据 `Content-Encoding: gzip` 解压后可解析 JSON；
+4. 下载的 `manifest.json.gz` 可以直接用 gzip 或 7-Zip 解压，解压后的 UTF-8 JSON 带缩进和换行并可正常解析；
 5. manifest 记录数、自身内容哈希与 SQLite 查询一致；
 6. 模拟 OSS 不可达时生成任务本身不被阻塞，第三次失败后 SQLite 显示 `cloud_failed`；
 7. 本地 GPU 成功、API 成功、失败但有部分输出、失败且空输出四类任务都有 private manifest；

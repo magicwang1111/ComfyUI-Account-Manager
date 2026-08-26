@@ -131,7 +131,8 @@ directly from the database. Start/end line numbers are included in `--status`.
 
 Completed and failed distributed jobs can be archived asynchronously to Aliyun
 OSS. The archive keeps public media objects separate from a private, gzip-encoded
-`manifest.json` containing the prompt's related scheduler/history SQLite rows.
+`manifest.json.gz` containing a pretty-printed `manifest.json` with the prompt's
+related scheduler/history SQLite rows.
 It supports stable per-server IDs, cross-process SQLite leases, exactly three
 outer attempts, and controlled historical backfill:
 

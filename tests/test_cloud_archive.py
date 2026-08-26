@@ -168,7 +168,7 @@ class CloudArchiveTests(unittest.TestCase):
         manifest = self.config.manifest_key("abc")
         self.assertIn("/public/servers/seetacloud-5090x2/", media)
         self.assertEqual(
-            "Goumee-ComfyUI-Server-Data/private/jobs/abc/manifest.json", manifest
+            "Goumee-ComfyUI-Server-Data/private/jobs/abc/manifest.json.gz", manifest
         )
         self.assertNotIn("private", self.config.public_url(media))
 
@@ -195,9 +195,13 @@ class CloudArchiveTests(unittest.TestCase):
         manifest = json.loads(gzip.decompress(manifest_bytes))
         self.assertEqual("prompt-1", manifest["export"]["prompt_id"])
         self.assertEqual("uploaded", manifest["artifacts"][0]["upload_status"])
-        self.assertEqual("gzip", backend.calls[-1][2])
+        self.assertEqual("application/gzip", backend.calls[-1][1])
+        self.assertIsNone(backend.calls[-1][2])
         self.assertEqual("no-store", backend.calls[-1][3])
         self.assertTrue(backend.calls[-1][5])
+        decoded_text = gzip.decompress(manifest_bytes).decode("utf-8")
+        self.assertIn('\n  "artifacts":', decoded_text)
+        self.assertTrue(decoded_text.endswith("\n"))
 
     def test_empty_failed_task_still_uploads_private_manifest(self):
         self.add_job(status="failed")

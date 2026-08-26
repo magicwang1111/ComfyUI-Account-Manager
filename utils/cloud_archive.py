@@ -75,7 +75,7 @@ class CloudArchiveConfig:
         )
 
     def manifest_key(self, prompt_id: str) -> str:
-        return f"{self.prefix}/private/jobs/{prompt_id}/manifest.json"
+        return f"{self.prefix}/private/jobs/{prompt_id}/manifest.json.gz"
 
     def oss_uri(self, key: str) -> str:
         return f"oss://{self.bucket}/{key}"
@@ -1148,7 +1148,14 @@ class ManifestExporter:
     def write_gzip(self, manifest: dict, path: str, max_bytes: int) -> dict:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with gzip.open(path, "wt", encoding="utf-8", compresslevel=6) as output:
-            json.dump(manifest, output, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            json.dump(
+                manifest,
+                output,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            output.write("\n")
         size = os.path.getsize(path)
         if size > int(max_bytes):
             raise ValueError("manifest_size_limit_exceeded")
@@ -1446,8 +1453,7 @@ class CloudArchiveManager:
                 self.backend.upload_file(
                     task["manifest_object_key"],
                     staging,
-                    "application/json",
-                    content_encoding="gzip",
+                    "application/gzip",
                     cache_control="no-store",
                     sha256=file_result["sha256"],
                     private=True,
