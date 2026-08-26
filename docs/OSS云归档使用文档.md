@@ -21,7 +21,7 @@ Goumee-ComfyUI-Server-Data/public/servers/<server_id>/YYYY/MM/DD/<prompt_id>/<or
 Goumee-ComfyUI-Server-Data/private/jobs/<prompt_id>/manifest.json.gz
 ```
 
-manifest 对象使用 `Content-Type: application/gzip`、`Cache-Control: no-store` 和 private object ACL，不设置 `Content-Encoding`。从 OSS 控制台下载后会明确得到 `manifest.json.gz`；解压后是带两空格缩进和换行的 UTF-8 `manifest.json`。数据库只永久保存 `oss://bucket/key`，不保存会过期的签名 URL。
+manifest 对象使用 `Content-Type: application/gzip`、`Cache-Control: no-store` 和 private object ACL，不设置 `Content-Encoding`。从 OSS 控制台下载后会明确得到 `manifest.json.gz`；gzip 文件头中的内部文件名固定为 `manifest.json`，不会泄露服务器端的 `.gz.tmp` staging 名称；解压后是带两空格缩进和换行的 UTF-8 `manifest.json`。数据库只永久保存 `oss://bucket/key`，不保存会过期的签名 URL。
 
 ## 2. 安全前置条件
 

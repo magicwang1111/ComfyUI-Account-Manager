@@ -1,6 +1,7 @@
 import base64
 import gzip
 import hashlib
+import io
 import ipaddress
 import json
 import mimetypes
@@ -1147,15 +1148,27 @@ class ManifestExporter:
 
     def write_gzip(self, manifest: dict, path: str, max_bytes: int) -> dict:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with gzip.open(path, "wt", encoding="utf-8", compresslevel=6) as output:
-            json.dump(
-                manifest,
-                output,
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            )
-            output.write("\n")
+        # Do not let gzip derive its embedded FNAME from the staging path.  The
+        # staging file deliberately ends in `.gz.tmp`; archive tools on Windows
+        # prefer the embedded name and would otherwise extract that temporary
+        # filename instead of the user-facing `manifest.json`.
+        with open(path, "wb") as raw_output:
+            with gzip.GzipFile(
+                filename="manifest.json",
+                mode="wb",
+                fileobj=raw_output,
+                compresslevel=6,
+                mtime=0,
+            ) as gzip_output:
+                with io.TextIOWrapper(gzip_output, encoding="utf-8") as output:
+                    json.dump(
+                        manifest,
+                        output,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    )
+                    output.write("\n")
         size = os.path.getsize(path)
         if size > int(max_bytes):
             raise ValueError("manifest_size_limit_exceeded")

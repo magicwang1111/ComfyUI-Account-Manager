@@ -202,6 +202,9 @@ class CloudArchiveTests(unittest.TestCase):
         decoded_text = gzip.decompress(manifest_bytes).decode("utf-8")
         self.assertIn('\n  "artifacts":', decoded_text)
         self.assertTrue(decoded_text.endswith("\n"))
+        self.assertTrue(manifest_bytes[3] & 0x08)
+        embedded_name = manifest_bytes[10:].split(b"\0", 1)[0]
+        self.assertEqual(b"manifest.json", embedded_name)
 
     def test_empty_failed_task_still_uploads_private_manifest(self):
         self.add_job(status="failed")
