@@ -127,6 +127,22 @@ directly from the database. Start/end line numbers are included in `--status`.
 ./manage_comfyui.sh job-logs --status cc8f0bef-6783-4367-a7bb-776c6f90ec8d
 ```
 
+## OSS cloud archive
+
+Completed and failed distributed jobs can be archived asynchronously to Aliyun
+OSS. The archive keeps public media objects separate from a private, gzip-encoded
+`manifest.json` containing the prompt's related scheduler/history SQLite rows.
+It supports stable per-server IDs, cross-process SQLite leases, exactly three
+outer attempts, and controlled historical backfill:
+
+```bash
+./manage_comfyui.sh cloud-backfill --dry-run --prompt-id PROMPT_ID
+```
+
+See [docs/OSS云归档使用文档.md](docs/OSS云归档使用文档.md) for credentials,
+configuration, Bucket Policy boundaries, SQL status queries, recovery, and
+deployment validation. Never commit OSS credentials to this repository.
+
 Jobs submitted before this version have no byte-offset metadata. Their port and
 time range remain available in the existing scheduler row, but cannot be
 retroactively sliced with byte-level accuracy.

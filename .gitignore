@@ -11,3 +11,5 @@ history.sqlite3*
 scheduler.sqlite3*
 scheduler_secret.txt
 *.lock
+cloud_staging/
+cloud_upload_checkpoints/

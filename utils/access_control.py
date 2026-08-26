@@ -36,12 +36,14 @@ class AccessControl:
         heartbeat_seconds: int = 5,
         stale_seconds: int = 60,
         worker_resource_class: str = "default",
+        cloud_archive=None,
     ):
         self.users_db = users_db
         self.server = server
         self.scheduler = scheduler
         self.instance_port = int(instance_port or 0)
         self.worker_resource_class = str(worker_resource_class or "default")
+        self.cloud_archive = cloud_archive
         self._worker_heartbeat = None
 
         self._current_user = contextvars.ContextVar("user_id", default=None)
@@ -431,6 +433,7 @@ class AccessControl:
         process_item=None,
     ):
         """Mark a user-specific queue task as done."""
+        cloud_completion = None
         with self.__prompt_queue.mutex:
             wrapped_prompt = self.__prompt_queue.currently_running.pop(item_id)
             prompt = self._unwrap_queue_item(wrapped_prompt)
@@ -478,8 +481,27 @@ class AccessControl:
                             )
                         else:
                             time.sleep(0.2 * (attempt + 1))
+                if self.cloud_archive:
+                    cloud_completion = {
+                        "prompt_id": prompt[1],
+                        "owner_id": user_id,
+                        "worker_port": self.instance_port,
+                        "generation_status": (
+                            "completed" if status_text == "success" else "failed"
+                        ),
+                        "history_item": self.__prompt_queue.history[prompt[1]],
+                        "finished_at": time.time(),
+                    }
                 clear_current_job(prompt[1])
             self.server.queue_updated()
+        if cloud_completion:
+            try:
+                self.cloud_archive.enqueue_completion(**cloud_completion)
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue cloud archive for %s",
+                    cloud_completion["prompt_id"],
+                )
 
     def _index_history_assets(self, prompt_id: str, user_id: str) -> None:
         if not self.scheduler:

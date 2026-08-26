@@ -100,6 +100,30 @@ WORKER_RESOURCE_CLASS = (
 )
 INSTANCE_LOG_FILE = os.getenv("ACCOUNT_MANAGER_INSTANCE_LOG", "").strip()
 
+CLOUD_ARCHIVE_ENABLED = bool(config.get("cloud_archive_enabled", False))
+CLOUD_SERVER_ID = str(config.get("cloud_server_id", "")).strip()
+CLOUD_OSS_REGION = str(config.get("cloud_oss_region", "cn-hangzhou")).strip()
+CLOUD_OSS_ENDPOINT = str(config.get("cloud_oss_endpoint", "")).strip()
+CLOUD_OSS_BUCKET = str(config.get("cloud_oss_bucket", "")).strip()
+CLOUD_OSS_PREFIX = str(config.get("cloud_oss_prefix", "")).strip().strip("/")
+CLOUD_PUBLIC_BASE_URL = str(config.get("cloud_public_base_url", "")).strip().rstrip("/")
+CLOUD_MAX_ATTEMPTS = max(1, int(config.get("cloud_max_attempts", 3)))
+CLOUD_UPLOAD_CONCURRENCY = min(
+    2, max(1, int(config.get("cloud_upload_concurrency", 2)))
+)
+CLOUD_REMOTE_MAX_BYTES = max(
+    1, int(config.get("cloud_remote_max_bytes", 20 * 1024 * 1024 * 1024))
+)
+CLOUD_MANIFEST_MAX_BYTES = max(
+    1, int(config.get("cloud_manifest_max_bytes", 2 * 1024 * 1024 * 1024))
+)
+CLOUD_STAGING_DIR = os.path.join(
+    EXT_PATH, config.get("cloud_staging_dir", "cloud_staging")
+)
+CLOUD_CHECKPOINT_DIR = os.path.join(
+    EXT_PATH, config.get("cloud_checkpoint_dir", "cloud_upload_checkpoints")
+)
+
 WEB_DIR = os.path.join(EXT_PATH, "account-manager-web")
 HTML_DIR = WEB_DIR
 CSS_DIR = os.path.join(WEB_DIR, "css")

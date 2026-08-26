@@ -13,3 +13,4 @@ from .access_control import AccessControl
 from .scheduler_store import SchedulerStore, WorkerHeartbeat
 from .internal_api import EventRelay, InternalSigner
 from .distributed_routes import DistributedRoutes
+from .cloud_archive import CloudArchiveConfig, CloudArchiveManager

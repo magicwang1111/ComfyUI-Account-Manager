@@ -3,6 +3,7 @@
 set -euo pipefail
 umask 077
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-/root/autodl-tmp/ComfyUI}"
 CONDA_ENV="${CONDA_ENV:-comfyui}"
 HOST="${HOST:-0.0.0.0}"
@@ -16,6 +17,7 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-10}"
 ACCOUNT_MANAGER_DIR="${ACCOUNT_MANAGER_DIR:-${APP_DIR}/custom_nodes/ComfyUI-Account-Manager}"
 INSTANCE_LOG_DIR="${INSTANCE_LOG_DIR:-${ACCOUNT_MANAGER_DIR}/logs/instances}"
+OSS_ENV_FILE="${OSS_ENV_FILE:-${SCRIPT_DIR}/oss.env}"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +29,7 @@ Usage:
   ./manage_comfyui.sh attach TARGET
   ./manage_comfyui.sh logs [-f|--follow] TARGET
   ./manage_comfyui.sh job-logs [-f|--follow|--status|--api] JOB_ID
+  ./manage_comfyui.sh cloud-backfill [--dry-run] [FILTERS]
 
 TARGET can be:
   - instance index: 1, 2, 3...
@@ -43,6 +46,8 @@ Examples:
   ./manage_comfyui.sh logs --follow 6006
   ./manage_comfyui.sh job-logs cc8f0bef-6783-4367-a7bb-776c6f90ec8d
   ./manage_comfyui.sh job-logs cc8f0bef-6783-4367-a7bb-776c6f90ec8d --api
+  ./manage_comfyui.sh cloud-backfill --dry-run --prompt-id cc8f0bef-6783-4367-a7bb-776c6f90ec8d
+  ./manage_comfyui.sh cloud-backfill --since 2026-08-25T00:00:00+08:00 --limit 20
 
 Defaults:
   APP_DIR=/root/autodl-tmp/ComfyUI
@@ -187,7 +192,9 @@ build_launch_command() {
 
   printf -v python_cmd '%q ' "${command[@]}"
 
-  printf 'source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && export ACCOUNT_MANAGER_INSTANCE_LOG=%q && export PYTHONUNBUFFERED=1 && set -o pipefail && %s 2>&1 | tee -a %q' \
+  printf 'if [[ -f %q ]]; then source %q; fi && source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && export ACCOUNT_MANAGER_INSTANCE_LOG=%q && export PYTHONUNBUFFERED=1 && set -o pipefail && %s 2>&1 | tee -a %q' \
+    "${OSS_ENV_FILE}" \
+    "${OSS_ENV_FILE}" \
     "${CONDA_SH}" \
     "${CONDA_ENV}" \
     "${APP_DIR}" \
@@ -496,6 +503,11 @@ main() {
       source "${CONDA_SH}"
       conda activate "${CONDA_ENV}"
       "${PYTHON_BIN}" "${ACCOUNT_MANAGER_DIR}/admin/job_logs.py" "$@"
+      ;;
+    cloud-backfill)
+      source "${CONDA_SH}"
+      conda activate "${CONDA_ENV}"
+      "${PYTHON_BIN}" "${ACCOUNT_MANAGER_DIR}/admin/cloud_backfill.py" "$@"
       ;;
     help|-h|--help)
       usage

@@ -1,6 +1,8 @@
 import os
+import logging
 import jwt
 import uuid
+import folder_paths
 from aiohttp import web
 
 from server import PromptServer
@@ -18,6 +20,7 @@ ip_filter = IPFilter(WHITELIST, BLACKLIST)
 timeout = Timeout(ip_filter, BLACKLIST_AFTER_ATTEMPTS)
 users_db = UsersDB(USERS_FILE)
 scheduler = None
+cloud_archive = None
 event_relay = None
 internal_signer = None
 if DISTRIBUTED_QUEUE_ENABLED:
@@ -31,6 +34,37 @@ if DISTRIBUTED_QUEUE_ENABLED:
     internal_signer = InternalSigner(SCHEDULER_SECRET_FILE)
     install_api_audit(scheduler.record_api_call)
 
+    if CLOUD_ARCHIVE_ENABLED:
+        try:
+            cloud_archive_config = CloudArchiveConfig(
+                enabled=True,
+                server_id=CLOUD_SERVER_ID,
+                region=CLOUD_OSS_REGION,
+                endpoint=CLOUD_OSS_ENDPOINT,
+                bucket=CLOUD_OSS_BUCKET,
+                prefix=CLOUD_OSS_PREFIX,
+                public_base_url=CLOUD_PUBLIC_BASE_URL,
+                max_attempts=CLOUD_MAX_ATTEMPTS,
+                upload_concurrency=CLOUD_UPLOAD_CONCURRENCY,
+                remote_max_bytes=CLOUD_REMOTE_MAX_BYTES,
+                manifest_max_bytes=CLOUD_MANIFEST_MAX_BYTES,
+                staging_dir=CLOUD_STAGING_DIR,
+                checkpoint_dir=CLOUD_CHECKPOINT_DIR,
+            )
+            cloud_archive = CloudArchiveManager(
+                cloud_archive_config,
+                scheduler_database=SCHEDULER_FILE,
+                history_database=HISTORY_FILE,
+                output_dir=folder_paths.get_output_directory(),
+                temp_dir=folder_paths.get_temp_directory(),
+                project_dir=os.path.dirname(__file__),
+                logger=logging.getLogger("ComfyUI-Account-Manager"),
+            )
+        except Exception:
+            logging.getLogger("ComfyUI-Account-Manager").exception(
+                "Failed to initialize cloud archive"
+            )
+
 access_control = AccessControl(
     users_db,
     instance,
@@ -40,6 +74,7 @@ access_control = AccessControl(
     heartbeat_seconds=WORKER_HEARTBEAT_SECONDS,
     stale_seconds=WORKER_STALE_SECONDS,
     worker_resource_class=WORKER_RESOURCE_CLASS,
+    cloud_archive=cloud_archive,
 )
 jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
