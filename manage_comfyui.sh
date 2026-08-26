@@ -3,7 +3,6 @@
 set -euo pipefail
 umask 077
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-/root/autodl-tmp/ComfyUI}"
 CONDA_ENV="${CONDA_ENV:-comfyui}"
 HOST="${HOST:-0.0.0.0}"
@@ -17,7 +16,7 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-10}"
 ACCOUNT_MANAGER_DIR="${ACCOUNT_MANAGER_DIR:-${APP_DIR}/custom_nodes/ComfyUI-Account-Manager}"
 INSTANCE_LOG_DIR="${INSTANCE_LOG_DIR:-${ACCOUNT_MANAGER_DIR}/logs/instances}"
-OSS_ENV_FILE="${OSS_ENV_FILE:-${SCRIPT_DIR}/oss.env}"
+OSS_ENV_FILE="${OSS_ENV_FILE:-$(dirname -- "${APP_DIR}")/Comfyui-admin/oss.env}"
 
 usage() {
   cat <<'EOF'
