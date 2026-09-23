@@ -324,6 +324,28 @@ class SchedulerStoreTests(unittest.TestCase):
                 item[2] = {"1": {"class_type": node_type}}
                 self.assertEqual("gpu", store.classify_item(tuple(item)))
 
+    def test_sparkvsr_subgraph_runs_only_on_gpu_workers(self):
+        config_path = Path(__file__).parents[1] / "config.json"
+        configured_types = json.loads(config_path.read_text(encoding="utf-8"))[
+            "gpu_node_types"
+        ]
+        store = SchedulerStore(self.database, gpu_node_types=configured_types)
+        item = list(queue_item(1, "sparkvsr"))
+        item[2] = {
+            "10": {"class_type": "LoadVideo"},
+            "41:26": {"class_type": "SparkVSR_SM_Model"},
+            "41:18": {"class_type": "SparkVSR_SM_PreRefer"},
+            "41:17": {"class_type": "SparkVSR_SM_KSampler"},
+            "13": {"class_type": "SaveVideo"},
+        }
+        store.enqueue(tuple(item), "user-a", 6006)
+        store.register_worker(6012, 101, "api")
+        store.register_worker(6008, 102, "gpu")
+
+        self.assertIsNone(store.claim(6012, 101, resource_class="api"))
+        claimed = store.claim(6008, 102, resource_class="gpu")
+        self.assertEqual("sparkvsr", claimed[1])
+
     def test_workers_only_claim_jobs_from_their_resource_pool(self):
         store = SchedulerStore(self.database, gpu_node_types=["UNETLoader"])
         gpu_item = list(queue_item(1, "gpu"))

@@ -21,6 +21,10 @@
         "SamplerCustomAdvanced",
         "UpscaleModelLoader",
         "ImageUpscaleWithModel",
+        "SparkVSR_SM_Model",
+        "SparkVSR_SM_KSampler",
+        "SparkVSR_SM_PreRefer",
+        "SparkVSR_SM_SRModel",
         "MiniMaxH3TurboLoRA",
         "MiniMaxH3TurboSampler",
         "SpectrumApplyMiniMaxH3"
