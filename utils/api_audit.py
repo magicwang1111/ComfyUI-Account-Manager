@@ -210,13 +210,14 @@ def _audit_body(value, headers=None) -> bytes | None:
     return raw
 
 
-def _record(client, request, response=None, error: BaseException = None) -> None:
+def _record(client, request, response=None, error: BaseException = None, *, stream=False) -> None:
     prompt_id = current_job()
     if not prompt_id or _recorder is None:
         return
     try:
         response_body = None
-        if response is not None:
+        # Reading .content consumes the raw stream used by COS and other downloaders.
+        if response is not None and not stream:
             try:
                 response_body = _audit_body(response.content, response.headers)
             except Exception:
@@ -273,7 +274,10 @@ def install_api_audit(recorder) -> None:
             except Exception as error:
                 _record("requests", _fallback_request(method, url, kwargs), error=error)
                 raise
-            _record("requests", response.request, response)
+            stream = kwargs.get("stream")
+            if stream is None:
+                stream = session.stream
+            _record("requests", response.request, response, stream=stream)
             return response
 
         requests.sessions.Session.request = requests_request

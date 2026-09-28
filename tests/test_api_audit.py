@@ -1,8 +1,13 @@
 import importlib.util
+import io
 import json
 import threading
 import unittest
 from pathlib import Path
+
+import requests
+from requests.adapters import BaseAdapter
+from urllib3.response import HTTPResponse
 
 
 module_path = Path(__file__).parents[1] / "utils" / "api_audit.py"
@@ -169,6 +174,36 @@ class ApiAuditTests(unittest.TestCase):
         self.assertEqual(["requests", "httpx"], [record["client"] for record in records])
         self.assertIn(b"requests-task", records[0]["response_body"])
         self.assertIn(b"httpx-task", records[1]["response_body"])
+
+    def test_streamed_response_remains_available_to_raw_downloaders(self):
+        records = []
+        api_audit.install_api_audit(lambda **record: records.append(record))
+        api_audit.set_current_job("cos-download")
+        video = b"\x00\x00\x00\x18ftypmp42" + b"x" * 100000
+
+        class Adapter(BaseAdapter):
+            def send(self, request, **kwargs):
+                response = requests.Response()
+                response.status_code = 200
+                response.headers.update({"Content-Type": "video/mp4", "Content-Length": str(len(video))})
+                response.raw = HTTPResponse(body=io.BytesIO(video), preload_content=False)
+                response.request = request
+                return response
+
+            def close(self):
+                pass
+
+        for session_default in (False, True):
+            with self.subTest(session_default=session_default), requests.Session() as session:
+                session.mount("https://", Adapter())
+                session.stream = session_default
+                kwargs = {} if session_default else {"stream": True}
+                with session.get("https://cos.example/output.mp4", **kwargs) as response:
+                    self.assertFalse(response._content_consumed)
+                    self.assertEqual(video, b"".join(response.raw.stream(1024)))
+                self.assertIsNone(records[-1]["response_body"])
+                self.assertEqual(200, records[-1]["response_status"])
+                self.assertEqual(str(len(video)), json.loads(records[-1]["response_headers"])["Content-Length"])
 
 
 if __name__ == "__main__":
