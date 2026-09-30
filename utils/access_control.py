@@ -743,6 +743,15 @@ class AccessControl:
             if v.get("user_id") == current_user_id
         }
 
+    def user_job_history(self):
+        if self.scheduler and self.__history_store:
+            current_user_id = self.get_current_user_id()
+            return self.__history_store.query(
+                owner_id=None if self.is_admin_user(current_user_id) else current_user_id,
+                for_jobs=True,
+            )
+        return self.user_queue_get_history()
+
     def user_queue_get_history(self, prompt_id=None, max_items=None, offset=-1, map_function=None):
         """Get the current user's queue history."""
         if self.scheduler and self.__history_store:

@@ -64,6 +64,7 @@ class HistoryStore:
         offset: int = -1,
         owner_id: str = None,
         prompt_id: str = None,
+        for_jobs: bool = False,
     ) -> dict:
         """Read current history directly from SQLite for all instances."""
         conditions = []
@@ -76,6 +77,24 @@ class HistoryStore:
             params.append(prompt_id)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        data_column = "data"
+        if for_jobs:
+            data_column = """json_set(
+                data,
+                '$.prompt[2]', json('{}'),
+                '$.prompt[3]', json_object(
+                    'create_time', json_extract(data, '$.prompt[3].create_time'),
+                    'extra_pnginfo', json_object('workflow', json_object(
+                        'id', json_extract(data, '$.prompt[3].extra_pnginfo.workflow.id')
+                    ))
+                ),
+                '$.status.messages', json((
+                    SELECT json_group_array(json(json_remove(
+                        value, '$[1].current_inputs', '$[1].current_outputs'
+                    )))
+                    FROM json_each(data, '$.status.messages')
+                ))
+            )"""
         count_sql = f"SELECT COUNT(*) FROM history {where}"
         with closing(self._connect()) as connection:
             total = connection.execute(count_sql, tuple(params)).fetchone()[0]
@@ -84,7 +103,7 @@ class HistoryStore:
                 normalized_offset = max(0, total - int(max_items or total))
 
             sql = f"""
-                SELECT prompt_id, owner_id, data
+                SELECT prompt_id, owner_id, {data_column}
                 FROM history
                 {where}
                 ORDER BY sequence ASC

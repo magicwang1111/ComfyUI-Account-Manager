@@ -67,6 +67,55 @@ class HistoryStoreTests(unittest.TestCase):
         self.assertEqual(["one"], list(self.store.query(owner_id="user-a")))
         self.assertEqual(["two"], list(self.store.query(prompt_id="two")))
 
+    def test_jobs_query_omits_large_inputs_but_preserves_detail_and_metadata(self):
+        item = self.item("user-a", 1)
+        item["prompt"][2] = {"node": {"inputs": {"image": "x" * 100000}}}
+        item["prompt"][3] = {
+            "create_time": 123,
+            "extra_pnginfo": {"workflow": {"id": "workflow-a", "nodes": ["large"]}},
+        }
+        item["status"] = {
+            "status_str": "error",
+            "completed": False,
+            "messages": [
+                ["execution_start", {"timestamp": 124}],
+                ["execution_error", {
+                    "node_id": "node", "exception_message": "failed",
+                    "timestamp": 125, "traceback": ["trace"],
+                    "current_inputs": {"image": "x" * 100000},
+                    "current_outputs": ["node"],
+                }],
+            ],
+        }
+        self.store.save("one", item, 10)
+        self.store.save("two", self.item("user-b", 2), 10)
+
+        result = self.store.query(owner_id="user-a", for_jobs=True)
+
+        self.assertEqual(["one"], list(result))
+        summary = result["one"]
+        self.assertEqual({}, summary["prompt"][2])
+        self.assertEqual(123, summary["prompt"][3]["create_time"])
+        self.assertEqual("workflow-a", summary["prompt"][3]["extra_pnginfo"]["workflow"]["id"])
+        self.assertEqual(item["outputs"], summary["outputs"])
+        self.assertEqual(item["status"]["messages"][0], summary["status"]["messages"][0])
+        error = summary["status"]["messages"][1][1]
+        self.assertEqual("failed", error["exception_message"])
+        self.assertEqual(["trace"], error["traceback"])
+        self.assertNotIn("current_inputs", error)
+        self.assertNotIn("current_outputs", error)
+        self.assertEqual(item, self.store.query(prompt_id="one")["one"])
+
+    def test_jobs_query_preserves_owner_pagination(self):
+        for value in range(4):
+            self.store.save(str(value), self.item("user-a", value), 10)
+        self.store.save("other", self.item("user-b", 5), 10)
+
+        self.assertEqual(
+            ["1", "2"],
+            list(self.store.query(owner_id="user-a", offset=1, max_items=2, for_jobs=True)),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

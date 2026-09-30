@@ -9,6 +9,8 @@ ComfyUI Account Manager adds login, admin-managed user registration, API token g
 - Admin-first setup with managed user registration.
 - JWT cookie or bearer-token authentication for ComfyUI routes.
 - Per-account input, temp, output, queue, and history isolation.
+- Task lists read compact history in a background thread; full workflow and error inputs remain available in task details.
+- Same-origin browser requests avoid DNS lookups, and loopback checks run in a background thread while retaining cross-site protection.
 - Per-account image/video asset visibility for generated outputs and uploaded assets.
 - Admin accounts can inspect all account assets, including legacy public assets.
 - Optional IP allow/deny lists, login timeout protection, HTTPS enforcement, and ComfyUI Manager admin-only access.

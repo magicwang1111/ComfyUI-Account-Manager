@@ -5,14 +5,16 @@ import uuid
 import folder_paths
 from aiohttp import web
 
-from server import PromptServer
+from server import PromptServer, is_loopback
 
 from .utils import *
 from .utils.api_audit import install_api_audit
+from .utils.frontend import create_jobs_middleware, install_origin_middleware
 
 instance = PromptServer.instance
 app = instance.app
 routes = instance.routes
+install_origin_middleware(app, is_loopback)
 
 logger = Logger(LOG_FILE, LOG_LEVELS)
 sanitizer = Sanitizer()
@@ -384,6 +386,7 @@ if SEPERATE_USERS:
 
     access_control.patch_folder_paths()
     access_control.patch_prompt_queue()
+    app.middlewares.append(create_jobs_middleware(instance.prompt_queue, access_control.user_job_history))
 
 if MANAGER_ADMIN_ONLY:
     app.middlewares.append(
