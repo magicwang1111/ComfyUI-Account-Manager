@@ -368,6 +368,12 @@ app.middlewares.append(
     )
 )
 
+if SEPERATE_USERS:
+    access_control.patch_comfy_user_manager()
+    access_control.patch_assets()
+    if access_control.asset_access is not None:
+        app.middlewares.append(access_control.asset_access.middleware())
+
 if scheduler:
     distributed_routes = DistributedRoutes(
         scheduler,
@@ -379,8 +385,6 @@ if scheduler:
     app.middlewares.append(distributed_routes.middleware())
 
 if SEPERATE_USERS:
-    access_control.patch_comfy_user_manager()
-    access_control.patch_assets()
     app.middlewares.append(access_control.create_view_access_control_middleware())
     app.middlewares.append(access_control.create_folder_access_control_middleware())
 

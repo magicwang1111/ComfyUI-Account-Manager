@@ -277,6 +277,10 @@ class AccessControl:
             if request.path not in ("/view", "/api/view"):
                 return await handler(request)
 
+            if self.asset_access is not None:
+                # The record/content adapter validates resolved paths and hashes.
+                return await handler(request)
+
             view_type = request.rel_url.query.get("type", "output")
             if view_type != "output":
                 return await handler(request)
@@ -852,6 +856,24 @@ class AccessControl:
 
     def patch_assets(self) -> None:
         """Patch ComfyUI asset ownership and visibility without editing ComfyUI."""
+        self.asset_access = None
+        try:
+            from app.assets.database.models import AssetContent
+        except ImportError:
+            pass  # The local legacy schema still uses AssetReference.
+        else:
+            from .asset_access import AssetAccess
+            model_roots = [path for name, (paths, _) in folder_paths.folder_names_and_paths.items()
+                           if name not in ('custom_nodes', 'configs') for path in paths]
+            self.asset_access = AssetAccess(
+                self.users_db, self.folder_paths, model_roots,
+                folder_paths.get_previews_directory(),
+            )
+            try:
+                self.asset_access.install()
+            except Exception:
+                logger.exception("Asset permission adapter unavailable; asset access disabled")
+            return
         try:
             import app.assets.database.queries as queries
             import app.assets.database.queries.common as common_queries
@@ -864,6 +886,10 @@ class AccessControl:
             from app.assets.database.models import AssetReference
             from app.database.db import create_session
         except Exception:
+            logger.exception("Legacy asset permission adapter unavailable")
+            # Never leave asset routes unprotected when the schema changes again.
+            from .asset_access import AssetAccess
+            self.asset_access = AssetAccess(self.users_db, self.folder_paths, [])
             return
 
         def build_visible_owner_clause(owner_id: str):

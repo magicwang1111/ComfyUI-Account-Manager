@@ -180,7 +180,6 @@ class DistributedRoutes:
         assets = []
         total = 0
         successful = 0
-        owner_id = request.get("user_id") or ""
         for port, (status, payload) in zip(ports, results):
             if status != 200 or not isinstance(payload, dict):
                 continue
@@ -190,11 +189,6 @@ class DistributedRoutes:
                 if not isinstance(asset, dict):
                     continue
                 assets.append(asset)
-                asset_id = str(asset.get("id") or asset.get("reference_id") or "")
-                if asset_id:
-                    self.scheduler.upsert_asset(
-                        asset_id, owner_id, "", port, asset
-                    )
         if ports and not successful:
             return web.json_response({"error": "No asset worker responded"}, status=503)
 
@@ -228,13 +222,9 @@ class DistributedRoutes:
     ) -> int | None:
         indexed = self.scheduler.get_asset(asset_id)
         if indexed and indexed.get("worker_port"):
-            if (
-                self._is_admin(request)
-                or not indexed.get("owner_id")
-                or indexed.get("owner_id") == (request.get("user_id") or "")
-            ):
-                return int(indexed["worker_port"])
-            return None
+            # The index locates a worker; that worker authorizes the actual asset.
+            # Older list requests may have stored the browser as owner_id.
+            return int(indexed["worker_port"])
 
         path = f"/api/assets/{asset_id}"
         ports = self.scheduler.worker_ports(self.worker_stale_seconds)
@@ -243,13 +233,6 @@ class DistributedRoutes:
         )
         for port, (status, payload) in zip(ports, results):
             if status == 200:
-                self.scheduler.upsert_asset(
-                    asset_id,
-                    request.get("user_id") or "",
-                    "",
-                    port,
-                    payload if isinstance(payload, dict) else {},
-                )
                 return port
         return None
 
