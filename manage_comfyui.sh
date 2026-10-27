@@ -191,7 +191,7 @@ build_launch_command() {
 
   printf -v python_cmd '%q ' "${command[@]}"
 
-  printf 'if [[ -f %q ]]; then source %q; fi && source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && export ACCOUNT_MANAGER_INSTANCE_LOG=%q && export PYTHONUNBUFFERED=1 && set -o pipefail && %s 2>&1 | tee -a %q' \
+  printf 'if [[ -f %q ]]; then source %q; fi && source %q && conda activate %q && cd %q && export CUDA_VISIBLE_DEVICES=%q && export ACCOUNT_MANAGER_WORKER_CLASS=%q && export ACCOUNT_MANAGER_INSTANCE_PORT=%q && export ACCOUNT_MANAGER_INSTANCE_LOG=%q && export ACCOUNT_MANAGER_FRONTEND_REVISION=%q && export PYTHONUNBUFFERED=1 && set -o pipefail && %s 2>&1 | tee -a %q' \
     "${OSS_ENV_FILE}" \
     "${OSS_ENV_FILE}" \
     "${CONDA_SH}" \
@@ -201,6 +201,7 @@ build_launch_command() {
     "${worker_class}" \
     "${port}" \
     "${log_file}" \
+    "${ACCOUNT_MANAGER_FRONTEND_REVISION}" \
     "${python_cmd}" \
     "${log_file}"
 }
@@ -465,6 +466,11 @@ main() {
     start|stop|restart|status)
       local -a targets
       mapfile -t targets < <(expand_targets "$@")
+
+      if [[ "${action}" == "start" || "${action}" == "restart" ]]; then
+        ACCOUNT_MANAGER_FRONTEND_REVISION="${ACCOUNT_MANAGER_FRONTEND_REVISION:-$(date -u +%s%N)}"
+        [[ "${ACCOUNT_MANAGER_FRONTEND_REVISION}" =~ ^[0-9]+$ ]] || die "ACCOUNT_MANAGER_FRONTEND_REVISION must be numeric"
+      fi
 
       if [[ "${action}" == "status" ]]; then
         printf '%-10s %-6s %-8s %-8s %s\n' "SESSION" "PORT" "STATE" "POOL:GPU" "PID"

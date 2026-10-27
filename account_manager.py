@@ -10,11 +10,13 @@ from server import PromptServer, is_loopback
 from .utils import *
 from .utils.api_audit import install_api_audit
 from .utils.frontend import create_jobs_middleware, install_origin_middleware
+from .utils.frontend_reload import install_frontend_reload
 
 instance = PromptServer.instance
 app = instance.app
 routes = instance.routes
 install_origin_middleware(app, is_loopback)
+install_frontend_reload(app, routes)
 
 logger = Logger(LOG_FILE, LOG_LEVELS)
 sanitizer = Sanitizer()

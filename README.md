@@ -158,6 +158,37 @@ When another custom node uses an external temp directory, Account Manager resolv
 
 ComfyUI's optional Assets panel is separate from queue history and requires starting ComfyUI with `--enable-assets`.
 
+## Browser refresh after restart
+
+Account Manager checks the server's startup revision when the WebSocket reconnects,
+the browser comes online, or a tab becomes visible. A newer revision triggers one
+refresh per browser tab. There is no periodic polling or ComfyUI core change.
+Existing browser pages must be manually refreshed once after installing this feature.
+
+Before refreshing, open workflows are backed up in that tab's `sessionStorage`.
+After reload, drafts already restored by ComfyUI are reused; missing drafts are
+opened as local recovery copies without overwriting saved files. Backups are bound
+to the authenticated account. If backup or recovery fails, automatic refresh pauses
+and displays a warning so the user can save manually. This protects graph edits;
+it does not preserve transient dialogs or file uploads in progress.
+
+`manage_comfyui.sh restart all` assigns one revision to all workers in that batch.
+For rolling restarts across separate commands, use the same nanosecond timestamp:
+
+```bash
+export ACCOUNT_MANAGER_FRONTEND_REVISION="$(date -u +%s%N)"
+./manage_comfyui.sh restart 1 2
+./manage_comfyui.sh restart 3 4
+unset ACCOUNT_MANAGER_FRONTEND_REVISION
+```
+
+Use a new timestamp for each deployment. Old workers' revisions are ignored to avoid
+refresh loops. Direct single-process starts generate a revision automatically;
+other multi-process launchers must supply a shared revision through this environment
+variable. Extension scripts and helper scripts revalidate their browser cache on
+reload. Only the refresh extension has a versioned URL, preserving other plugins'
+module identities and relative imports. A reverse proxy must honor these cache headers.
+
 ## API Access
 
 Authenticated API calls can include either:
