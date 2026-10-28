@@ -11,6 +11,7 @@ let paused = false;
 let disconnected = false;
 let connectionEpoch = 0;
 let retryTimer;
+let connectionToast;
 
 function readStored(key) {
     const value = sessionStorage.getItem(key);
@@ -156,8 +157,15 @@ async function checkForUpdate() {
 app.registerExtension({
     name: "ComfyUI.AccountManager.AutoRefresh",
     setup() {
-        // ComfyUI already displays connection status; do not add a save warning while offline.
+        // Replace the built-in reconnect toast for this page only (do not save the setting).
+        app.extensionManager.setting.settings["Comfy.Toast.DisableReconnectingToast"] = true;
         const onDisconnect = () => {
+            if (!disconnected) {
+                connectionToast = {
+                    severity: "info", summary: "服务器连接已断开，正在等待恢复", life: 0, closable: false,
+                };
+                app.extensionManager.toast.add(connectionToast);
+            }
             disconnected = true;
             connectionEpoch++;
             clearTimeout(retryTimer);
@@ -166,6 +174,10 @@ app.registerExtension({
         window.addEventListener("offline", onDisconnect);
         api.addEventListener("reconnected", () => {
             disconnected = false;
+            if (connectionToast) {
+                app.extensionManager.toast.remove(connectionToast);
+                connectionToast = undefined;
+            }
             return checkForUpdate();
         });
         window.addEventListener("online", checkForUpdate);

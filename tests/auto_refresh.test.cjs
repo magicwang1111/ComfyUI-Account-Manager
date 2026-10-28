@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 function harness() {
-    const events = new Map(), storage = new Map(), warnings = [], timers = new Map();
+    const events = new Map(), storage = new Map(), warnings = [], timers = new Map(), toasts = [];
     let extension, reloads = 0;
     const api = {
         addEventListener: (name, fn) => events.set(name, fn),
@@ -15,7 +15,10 @@ function harness() {
         graphToPrompt: async () => ({ workflow: { nodes: [] } }),
         extensionManager: {
             workflow: { openWorkflows: [] },
-            toast: { add: item => warnings.push(item) },
+            toast: {
+                add: item => { toasts.push(item); if (item.severity === 'warn') warnings.push(item); },
+                remove: item => { const i = toasts.indexOf(item); if (i >= 0) toasts.splice(i, 1); },
+            },
             setting: { settings: {} },
         },
         registerExtension: value => { extension = value; },
@@ -35,7 +38,7 @@ function harness() {
         document: { addEventListener() {} },
     });
     extension.setup();
-    return { app, api, warnings, storage, sessionStorage, events, reloads: () => reloads };
+    return { app, api, warnings, toasts, storage, sessionStorage, events, reloads: () => reloads };
 }
 
 test('server unavailable does not warn or reload', async () => {
@@ -86,4 +89,18 @@ test('disconnect while version response is pending discards the response', async
     h.api.fetchApi = fetch;
     await h.events.get('reconnected')();
     assert.equal(h.reloads(), 1);
+});
+
+test('disconnect shows one waiting notification and reconnect removes it', async () => {
+    const h = harness();
+    h.api.fetchApi = async () => ({ ok: true, json: async () => ({ revision: '100', user_id: 'a' }) });
+    h.events.get('reconnecting')();
+    h.events.get('reconnecting')();
+    assert.equal(h.toasts.length, 1);
+    assert.equal(h.toasts[0].summary, '服务器连接已断开，正在等待恢复');
+    assert.equal(h.app.extensionManager.setting.settings['Comfy.Toast.DisableReconnectingToast'], true);
+    await h.events.get('reconnected')();
+    assert.equal(h.toasts.length, 0);
+    h.events.get('reconnecting')();
+    assert.equal(h.toasts.length, 1);
 });

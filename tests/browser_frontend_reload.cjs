@@ -12,6 +12,12 @@ async function harness(browser) {
     const context = await browser.newContext();
     context.setDefaultTimeout(15000);
     const state = { served: '100', current: '100', user: 'user-a', status: 200, checks: 0 };
+    const sockets = [];
+    await context.routeWebSocket('**/ws*', socket => {
+        if (state.disconnected) return socket.close();
+        socket.connectToServer();
+        sockets.push(socket);
+    });
     await context.route('**/extensions', async route => {
         const response = await route.fetch();
         const extensions = await response.json();
@@ -39,7 +45,7 @@ async function harness(browser) {
     await page.waitForFunction(() => window.comfyAPI?.app?.app?.extensionManager?.workflow?.activeWorkflow);
     await page.waitForFunction(() => window.comfyAPI.app.app.isGraphReady);
     while (!state.checks) await page.waitForTimeout(50);
-    return { context, page, state, errors, navigations: () => navigations };
+    return { context, page, state, errors, sockets, navigations: () => navigations };
 }
 
 async function reconnect(page) {
@@ -74,6 +80,33 @@ async function draftImages(page) {
 (async () => {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
     try {
+        const connection = await harness(browser);
+        const connectionBefore = connection.navigations();
+        const waiting = connection.page.getByText('服务器连接已断开，正在等待恢复', { exact: true });
+        for (let cycle = 0; cycle < 2; cycle++) {
+            await connection.page.evaluate(async () => {
+                const { api } = await import('/scripts/api.js');
+                api.dispatchEvent(new Event('reconnecting'));
+                api.dispatchEvent(new Event('reconnecting'));
+            });
+            await waiting.waitFor();
+            assert.equal(await waiting.count(), 1);
+            await reconnect(connection.page);
+            await waiting.waitFor({ state: 'hidden' });
+        }
+        connection.state.disconnected = true;
+        await connection.sockets.at(-1).close({ code: 1001, reason: 'Test server shutdown' });
+        await waiting.waitFor();
+        await connection.page.waitForTimeout(1500);
+        assert.equal(await waiting.count(), 1);
+        assert.equal(await connection.page.getByText('自动刷新已暂停', { exact: true }).count(), 0);
+        connection.state.disconnected = false;
+        await waiting.waitFor({ state: 'hidden' });
+        assert.equal(connection.navigations(), connectionBefore);
+        assert.deepEqual(connection.errors, []);
+        await connection.context.close();
+        console.log('PASS: WebSocket disconnect shows one Chinese waiting toast and reconnect removes it');
+
         const h = await harness(browser);
         await openDraft(h.page, 'one', 'unsaved-one.png');
         await openDraft(h.page, 'two', 'unsaved-two.png');
