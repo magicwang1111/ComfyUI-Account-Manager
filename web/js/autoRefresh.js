@@ -1,5 +1,6 @@
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
+import { ChangeTracker } from "/scripts/changeTracker.js";
 
 const BACKUP_KEY = "AccountManager.RefreshBackup";
 const SEEN_KEY = "AccountManager.RefreshRevision";
@@ -35,6 +36,7 @@ async function snapshotWorkflows(info) {
     const workflow = app.rootGraph.serialize();
     const open = store.openWorkflows;
     const workflows = open.map(item => ({
+        path: item.path,
         name: item.filename,
         data: item === active ? workflow : item.activeState,
     }));
@@ -56,31 +58,51 @@ async function restoreWorkflows(info) {
         return;
     }
     const store = app.extensionManager.workflow;
-    const activeGraph = app.rootGraph.serialize();
-    const active = store.activeWorkflow;
+    for (const item of store.openWorkflows) {
+        if (item !== store.activeWorkflow && !item.activeState) await item.load();
+    }
     const restored = [];
     for (const saved of backup.workflows) {
-        const serialized = JSON.stringify(saved.data);
-        const existing = store.openWorkflows.find(item =>
-            !restored.includes(item) && JSON.stringify(item === active ? activeGraph : item.activeState) === serialized);
-        if (existing) {
+        const available = store.openWorkflows.filter(item => !restored.includes(item));
+        const graphData = item => item === store.activeWorkflow ? app.rootGraph.serialize() : item.activeState;
+        const existing = saved.path
+            ? store.getWorkflowByPath(saved.path)
+            : available.find(item => saved.data.id && graphData(item)?.id === saved.data.id)
+                || available.find(item => ChangeTracker.graphEqual(graphData(item), saved.data));
+        if (existing && !existing.activeState) await existing.load();
+        if (existing && available.includes(existing) && ChangeTracker.graphEqual(graphData(existing), saved.data)) {
             restored.push(existing);
             continue;
         }
-        // Recover a local copy; never overwrite a workflow saved on the server.
+        // Keep the original path and tab instead of creating a renamed duplicate.
         const previous = store.activeWorkflow;
-        const result = await app.loadGraphData(saved.data, true, true, `${saved.name} (刷新恢复)`);
-        if (result === false || !store.activeWorkflow || store.activeWorkflow === previous) {
+        const initialState = existing?.changeTracker.initialState;
+        const target = existing || (saved.path?.startsWith("workflows/")
+            ? store.createTemporary(saved.path.slice("workflows/".length), saved.data)
+            : `${saved.name} (刷新恢复)`);
+        const result = await app.loadGraphData(saved.data, true, true, target);
+        if (result === false || !store.activeWorkflow || (typeof target !== "string" ? store.activeWorkflow.path !== target.path : store.activeWorkflow === previous)) {
             throw new Error("The recovered workflow could not be opened");
+        }
+        if (existing) {
+            existing.changeTracker.initialState = initialState;
+            existing.changeTracker.updateModified();
         }
         restored.push(store.activeWorkflow);
     }
+    for (let index = 0; index < restored.length; index++) {
+        const current = store.openWorkflows.indexOf(restored[index]);
+        if (current !== index) store.reorderWorkflows(current, index);
+    }
     const selected = restored[backup.active];
     if (selected && selected !== store.activeWorkflow) {
+        const initialState = selected.changeTracker.initialState;
         const result = await app.loadGraphData(selected.activeState, true, true, selected);
         if (result === false || store.activeWorkflow !== selected) {
             throw new Error("The active workflow could not be restored");
         }
+        selected.changeTracker.initialState = initialState;
+        selected.changeTracker.updateModified();
     }
     sessionStorage.removeItem(BACKUP_KEY);
 }
@@ -91,7 +113,7 @@ async function checkForUpdate() {
         pending = true;
         return;
     }
-    if (!app.isGraphReady || app.extensionManager.workflow.isBusy || app.configuringGraph) {
+    if (!app.isGraphReady || app.extensionManager.workflow.isBusy || app.extensionManager.workflow.isSyncLoading || app.configuringGraph) {
         clearTimeout(retryTimer);
         retryTimer = setTimeout(checkForUpdate, 500);
         return;

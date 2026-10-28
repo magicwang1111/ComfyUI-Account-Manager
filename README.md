@@ -168,8 +168,10 @@ Existing browser pages must be manually refreshed once after installing this fea
 Before refreshing, open workflows are backed up in that tab's `sessionStorage`.
 Backup serializes the graph directly, without running API prompt serializers;
 inactive tabs that have not loaded yet are loaded before backup.
-After reload, drafts already restored by ComfyUI are reused; missing drafts are
-opened as local recovery copies without overwriting saved files. Backups are bound
+After reload, original workflow paths identify tabs already restored by ComfyUI;
+view changes do not create duplicate tabs. Missing drafts and pending edits are
+restored under their original paths and tab order without overwriting saved files.
+Backups from older versions are matched by graph identity and content. Backups are bound
 to the authenticated account. If backup or recovery fails, automatic refresh pauses
 and displays a warning so the user can save manually. This protects graph edits;
 it does not preserve transient dialogs or file uploads in progress.

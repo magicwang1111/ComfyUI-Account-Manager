@@ -113,11 +113,14 @@ async function draftImages(page) {
         const h = await harness(browser);
         await openDraft(h.page, 'one', 'unsaved-one.png');
         await openDraft(h.page, 'two', 'unsaved-two.png');
+        const originalPaths = await h.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.openWorkflows.map(item => item.path));
         const before = h.navigations();
         h.state.served = h.state.current = '200';
         await Promise.all([h.page.waitForEvent('load'), reconnect(h.page)]);
         await h.page.waitForFunction(key => sessionStorage.getItem(key) === null && window.comfyAPI?.app?.app?.isGraphReady && document.querySelector('body'), backupKey);
         const images = await draftImages(h.page);
+        assert.deepEqual(await h.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.openWorkflows.map(item => item.path)), originalPaths,
+            'Reload added duplicate workflow tabs');
         assert(images.includes('unsaved-one.png'), 'Inactive unsaved draft was lost');
         assert(images.includes('unsaved-two.png'), 'Active unsaved draft was lost');
         assert.equal(await h.page.evaluate(() => window.comfyAPI.app.app.rootGraph.serialize().nodes.find(n => n.type === 'LoadImage').widgets_values[0]), 'unsaved-two.png');
@@ -128,13 +131,67 @@ async function draftImages(page) {
             await h.page.waitForTimeout(250);
         }
         assert.equal(h.navigations(), before + 1, 'Same/older workers caused a reload loop');
+        for (const revision of ['210', '220']) {
+            h.state.served = h.state.current = revision;
+            await Promise.all([h.page.waitForEvent('load'), reconnect(h.page)]);
+            await h.page.waitForFunction(key => sessionStorage.getItem(key) === null && window.comfyAPI?.app?.app?.isGraphReady, backupKey);
+            assert.deepEqual(await h.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.openWorkflows.map(item => item.path)), originalPaths,
+                'Repeated restarts added workflow tabs');
+            assert.deepEqual((await draftImages(h.page)).sort(), images.slice().sort());
+        }
         h.state.served = h.state.current = '300';
         await h.page.reload();
         await h.page.waitForTimeout(700);
-        assert.equal(h.navigations(), before + 2, 'An already updated page refreshed again');
+        assert.equal(h.navigations(), before + 4, 'An already updated page refreshed again');
         assert.deepEqual(h.errors, []);
         await h.context.close();
-        console.log('PASS: unsaved tabs, reconnect, stale worker, once per revision, manual refresh');
+        console.log('PASS: repeated restarts preserve tab paths, order and drafts without duplicates');
+
+        const saved = await harness(browser);
+        await openDraft(saved.page, 'saved', 'on-disk.png');
+        const savedPath = await saved.page.evaluate(async () => {
+            const { app } = await import('/scripts/app.js');
+            const store = app.extensionManager.workflow;
+            store.activeWorkflow.changeTracker.prepareForSave();
+            await store.saveWorkflow(store.activeWorkflow);
+            // Simulate an edit immediately before reload, before draft persistence runs.
+            const nodeId = app.rootGraph.serialize().nodes.find(n => n.type === 'LoadImage').id;
+            app.rootGraph.getNodeById(nodeId).widgets.find(w => w.name === 'image').value = 'latest-edit.png';
+            return store.activeWorkflow.path;
+        });
+        saved.state.served = saved.state.current = '200';
+        await Promise.all([saved.page.waitForEvent('load'), reconnect(saved.page)]);
+        await saved.page.waitForFunction(key => sessionStorage.getItem(key) === null && window.comfyAPI?.app?.app?.isGraphReady, backupKey);
+        assert.equal(await saved.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.activeWorkflow.path), savedPath);
+        assert((await draftImages(saved.page)).includes('latest-edit.png'));
+        assert.equal(await saved.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.activeWorkflow.isModified), true);
+        const diskContent = await saved.page.evaluate(async path => {
+            const { api } = await import('/scripts/api.js');
+            return (await api.getUserData(path)).json();
+        }, savedPath);
+        assert.equal(diskContent.nodes.find(n => n.type === 'LoadImage').widgets_values[0], 'on-disk.png');
+        // Backups created by the previous plugin version have no path field.
+        const savedPaths = await saved.page.evaluate(key => {
+            const app = window.comfyAPI.app.app;
+            const data = app.rootGraph.serialize();
+            data.extra.ds = { scale: 0.5, offset: [123, 456] };
+            sessionStorage.setItem(key, JSON.stringify({ user_id: 'user-a', active: 0, workflows: [{ name: 'saved', data }] }));
+            return app.extensionManager.workflow.openWorkflows.map(item => item.path).sort();
+        }, backupKey);
+        await reconnect(saved.page);
+        await saved.page.waitForFunction(key => sessionStorage.getItem(key) === null, backupKey);
+        assert.deepEqual(await saved.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.openWorkflows.map(item => item.path).sort()), savedPaths);
+        await saved.page.evaluate(async () => {
+            const store = window.comfyAPI.app.app.extensionManager.workflow;
+            for (const tab of store.openWorkflows.slice()) if (tab !== store.activeWorkflow) await store.closeWorkflow(tab);
+        });
+        saved.state.served = saved.state.current = '300';
+        await Promise.all([saved.page.waitForEvent('load'), reconnect(saved.page)]);
+        await saved.page.waitForFunction(key => sessionStorage.getItem(key) === null && window.comfyAPI?.app?.app?.isGraphReady, backupKey);
+        assert.deepEqual(await saved.page.evaluate(() => window.comfyAPI.app.app.extensionManager.workflow.openWorkflows.map(item => item.path)), [savedPath]);
+        assert.deepEqual(saved.errors, []);
+        await saved.context.close();
+        console.log('PASS: saved workflows retain unsaved edits, legacy backups reuse tabs, closed tabs stay closed');
 
         const serializers = await harness(browser);
         await openDraft(serializers.page, 'api-draft', 'api-draft.png');
