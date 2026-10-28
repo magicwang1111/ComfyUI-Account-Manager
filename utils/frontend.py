@@ -41,6 +41,10 @@ def create_jobs_middleware(prompt_queue, get_history):
             history,
             **options,
         )
+        for job in jobs:
+            recovery = history.get(job["id"], {}).get("api_recovery", {})
+            if any(task.get("state") == "recovered" for task in recovery.values()):
+                job["api_result_recovered"] = True
         return web.json_response({
             "jobs": jobs,
             "pagination": {

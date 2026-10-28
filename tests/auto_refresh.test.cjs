@@ -14,6 +14,7 @@ function harness() {
         isGraphReady: true,
         ui: { settings: { settingsValues: {} } },
         graphToPrompt: async () => ({ workflow: { nodes: [] } }),
+        rootGraph: { serialize: () => ({ nodes: [] }) },
         extensionManager: {
             workflow: { openWorkflows: [] },
             toast: {
@@ -53,16 +54,16 @@ test('server unavailable does not warn or reload', async () => {
 for (const fail of [true, false]) {
     test(`disconnect during snapshot (${fail ? 'failure' : 'success'}) waits for reconnect`, async () => {
         const h = harness();
-        h.app.graphToPrompt = async () => {
+        h.app.rootGraph.serialize = () => {
             h.events.get('reconnecting')?.();
             if (fail) throw new TypeError('Failed to fetch');
-            return { workflow: { nodes: [] } };
+            return { nodes: [] };
         };
         await h.events.get('reconnected')();
         assert.equal(h.warnings.length, 0);
         assert.equal(h.reloads(), 0);
         assert.equal(h.storage.has('AccountManager.RefreshRevision'), false);
-        h.app.graphToPrompt = async () => ({ workflow: { nodes: [] } });
+        h.app.rootGraph.serialize = () => ({ nodes: [] });
         await h.events.get('reconnected')();
         assert.equal(h.reloads(), 1);
     });
@@ -70,11 +71,30 @@ for (const fail of [true, false]) {
 
 test('real local storage failure still pauses refresh', async () => {
     const h = harness();
-    h.sessionStorage.setItem = () => { throw new Error('Quota exceeded'); };
+    h.sessionStorage.setItem = () => { throw Object.assign(new Error('Quota exceeded'), { name: 'QuotaExceededError' }); };
     await h.events.get('reconnected')();
     await h.events.get('reconnected')();
     assert.equal(h.warnings.length, 1);
+    assert.match(h.warnings[0].detail, /浏览器暂存空间不足/);
     assert.equal(h.reloads(), 0);
+});
+
+test('backup does not invoke API prompt serializers', async () => {
+    const h = harness();
+    h.app.graphToPrompt = async () => { throw new Error('Node API serialization failed'); };
+    await h.events.get('reconnected')();
+    assert.equal(h.reloads(), 1);
+    assert.equal(h.warnings.length, 0);
+});
+
+test('unloaded workflow tabs are loaded before backup', async () => {
+    const h = harness();
+    const tab = { filename: 'inactive', activeState: null, async load() { this.activeState = { nodes: [] }; } };
+    h.app.extensionManager.workflow.openWorkflows = [tab];
+    await h.events.get('reconnected')();
+    assert.equal(h.reloads(), 1);
+    assert.equal(h.warnings.length, 0);
+    assert.equal(JSON.parse(h.storage.get('AccountManager.RefreshBackup')).workflows[0].name, 'inactive');
 });
 
 test('disconnect while version response is pending discards the response', async () => {

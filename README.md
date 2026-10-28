@@ -166,6 +166,8 @@ refresh per browser tab. There is no periodic polling or ComfyUI core change.
 Existing browser pages must be manually refreshed once after installing this feature.
 
 Before refreshing, open workflows are backed up in that tab's `sessionStorage`.
+Backup serializes the graph directly, without running API prompt serializers;
+inactive tabs that have not loaded yet are loaded before backup.
 After reload, drafts already restored by ComfyUI are reused; missing drafts are
 opened as local recovery copies without overwriting saved files. Backups are bound
 to the authenticated account. If backup or recovery fails, automatic refresh pauses
@@ -201,7 +203,10 @@ the audited `requests`/`httpx` clients create encrypted recovery checkpoints. Af
 job becomes `worker_lost`, a single recovery worker queries the original task ID,
 saves returned videos under the owner's output directory, and adds them to that
 owner's history. It never resubmits generation or runs downstream workflow nodes;
-the history remains failed with an explicit recovery message.
+the history remains failed with an explicit recovery message. The original Job Queue
+card provides a “查看已恢复视频” button to view recovered videos, including outputs
+already recovered before this button was added. This UI is supplied by the extension;
+no ComfyUI core or bundled frontend files need to be modified.
 
 Supported protocols are Seedance Ark, Wan OPC/Vapeur, and Kling official/Vapeur video
 endpoints using bearer authentication. Other protocols, synchronous calls, and old

@@ -28,8 +28,11 @@ function pauseRefresh(message, error) {
 
 async function snapshotWorkflows(info) {
     const store = app.extensionManager.workflow;
+    for (const item of store.openWorkflows) {
+        if (item !== store.activeWorkflow && !item.activeState) await item.load();
+    }
     const active = store.activeWorkflow;
-    const { workflow } = await app.graphToPrompt();
+    const workflow = app.rootGraph.serialize();
     const open = store.openWorkflows;
     const workflows = open.map(item => ({
         name: item.filename,
@@ -53,7 +56,7 @@ async function restoreWorkflows(info) {
         return;
     }
     const store = app.extensionManager.workflow;
-    const activeGraph = (await app.graphToPrompt()).workflow;
+    const activeGraph = app.rootGraph.serialize();
     const active = store.activeWorkflow;
     const restored = [];
     for (const saved of backup.workflows) {
@@ -137,7 +140,10 @@ async function checkForUpdate() {
             sessionStorage.setItem(SEEN_KEY, JSON.stringify({ revision: info.revision, user_id: info.user_id }));
         } catch (error) {
             if (epoch !== connectionEpoch || disconnected) return;
-            pauseRefresh("无法安全暂存工作流，请先保存后手动刷新。", error);
+            const message = error?.name === "QuotaExceededError"
+                ? "浏览器暂存空间不足，自动刷新已暂停。请保存打开的工作流后手动刷新。"
+                : "工作流备份未完成，自动刷新已暂停。请保存打开的工作流后手动刷新。";
+            pauseRefresh(message, error);
             return;
         }
         reloading = true;

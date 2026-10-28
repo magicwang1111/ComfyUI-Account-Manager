@@ -114,6 +114,19 @@ class JobsTests(unittest.IsolatedAsyncioTestCase):
                 response = await middleware(make_mocked_request("GET", "/api/jobs?" + query), AsyncMock())
                 self.assertEqual(400, response.status)
 
+    async def test_recovered_media_has_viewer_flag_without_marking_workflow_completed(self):
+        history = self.history()
+        history["2"]["status"]["status_str"] = "error"
+        history["2"]["api_recovery"] = {"task": {"state": "recovered"}}
+        history["1"]["api_recovery"] = {"task": {"state": "pending"}}
+        middleware = frontend.create_jobs_middleware(self.queue, lambda: history)
+        response = await middleware(make_mocked_request("GET", "/api/jobs?limit=10"), AsyncMock())
+        jobs = {job["id"]: job for job in json.loads(response.text)["jobs"]}
+        self.assertTrue(jobs["2"]["api_result_recovered"])
+        self.assertEqual("failed", jobs["2"]["status"])
+        self.assertNotIn("api_result_recovered", jobs["1"])
+        self.assertNotIn("api_result_recovered", jobs["0"])
+
     async def test_details_and_other_methods_use_core_handler(self):
         history = Mock(side_effect=AssertionError("Unexpected list query"))
         middleware = frontend.create_jobs_middleware(self.queue, history)

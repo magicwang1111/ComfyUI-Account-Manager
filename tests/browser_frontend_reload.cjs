@@ -136,6 +136,19 @@ async function draftImages(page) {
         await h.context.close();
         console.log('PASS: unsaved tabs, reconnect, stale worker, once per revision, manual refresh');
 
+        const serializers = await harness(browser);
+        await openDraft(serializers.page, 'api-draft', 'api-draft.png');
+        await serializers.page.evaluate(async () => {
+            const { app } = await import('/scripts/app.js');
+            app.graphToPrompt = async () => { throw new Error('API widget serializer failed'); };
+        });
+        serializers.state.served = serializers.state.current = '200';
+        await Promise.all([serializers.page.waitForEvent('load'), reconnect(serializers.page)]);
+        await serializers.page.waitForFunction(key => sessionStorage.getItem(key) === null && window.comfyAPI?.app?.app?.isGraphReady, backupKey);
+        assert((await draftImages(serializers.page)).includes('api-draft.png'));
+        await serializers.context.close();
+        console.log('PASS: API prompt serializer failures do not prevent workflow backup and refresh');
+
         const quota = await harness(browser);
         await openDraft(quota.page, 'quota', 'keep-me.png');
         await quota.page.evaluate(key => {

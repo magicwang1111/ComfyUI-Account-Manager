@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const fixture = spawnSync(process.env.COMFY_TEST_PYTHON || 'python', ['-c', `
@@ -14,7 +15,8 @@ module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 with tempfile.TemporaryDirectory() as directory:
  store=module.HistoryStore(str(Path(directory)/'history.db'))
  old={'prompt':[0,'recovered',{}, {'create_time':1000},[]], 'user_id':'a',
-      'api_recovery':{'task':{'state':'pending'}},'outputs':{},
+      'api_recovery':{'task':{'state':'recovered'}},
+      'outputs':{'api_recovery_task':{'video':[{'filename':'recovered-test.mp4','subfolder':'a/recovered','type':'output','format':'video/mp4'}]}},
       'status':{'status_str':'error','completed':False,'messages':[
         ['execution_start',{'timestamp':1000}],
         ['execution_error',{'node_id':'7','node_type':'APIRecovery',
@@ -34,6 +36,15 @@ const payload = JSON.parse(fixture.stdout);
     const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
     try {
         const page = await browser.newPage();
+        await page.route('**/extensions', async route => {
+            const response = await route.fetch();
+            const extensions = await response.json();
+            extensions.push('/extensions/ComfyUI-Account-Manager/js/apiRecovery.js');
+            await route.fulfill({ json: extensions });
+        });
+        await page.route('**/extensions/ComfyUI-Account-Manager/js/apiRecovery.js', route => route.fulfill({
+            contentType: 'application/javascript', body: fs.readFileSync(path.join(__dirname, '../web/js/apiRecovery.js'), 'utf8'),
+        }));
         let broken = true;
         await page.route('**/api/jobs?*', route => {
             const body = structuredClone(payload.page);
@@ -56,7 +67,22 @@ const payload = JSON.parse(fixture.stdout);
         });
         assert.equal(detail.id, 'recovered');
         assert.deepEqual(detail.execution_error.traceback, []);
+        await page.reload();
+        await page.waitForFunction(() => window.comfyAPI?.app?.app?.extensionManager?.workflow?.activeWorkflow);
+        await page.locator('#splash-loader').waitFor({ state: 'hidden' });
+        if (!await page.getByTestId('job-assets-list').isVisible()) {
+            await page.getByTestId('queue-overlay-toggle').click();
+        }
+        const button = page.locator('[data-job-id="recovered"]').getByRole('button', { name: '查看已恢复视频' });
+        await button.waitFor();
+        await button.click();
+        const video = page.locator('.am-recovery-dialog video');
+        await video.waitFor();
+        assert((await video.getAttribute('src')).includes('filename=recovered-test.mp4'));
+        await page.locator('.am-recovery-dialog').getByRole('button', { name: '关闭' }).click();
+        await video.waitFor({ state: 'detached' });
         console.log('PASS: real frontend reproduces empty history and accepts repaired legacy recovery list/detail');
+        console.log('PASS: interrupted job retains failed status and opens recovered media from its queue card');
     } finally {
         await browser.close();
     }
