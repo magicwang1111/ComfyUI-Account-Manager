@@ -20,6 +20,24 @@ class ApiAuditTests(unittest.TestCase):
     def tearDown(self):
         api_audit.clear_current_job()
         api_audit._recorder = None
+        api_audit._observer = None
+
+    def test_checkpoint_observer_keeps_audit_redacted_and_recovery_is_not_misattributed(self):
+        records, observed = [], []
+        api_audit._recorder = lambda **item: records.append(item)
+        api_audit._observer = lambda *args: observed.append(args)
+        api_audit.set_current_job("job-a")
+        request = type("Request", (), {"method": "POST", "url": "https://api.example/tasks",
+                       "headers": {"Authorization": "Bearer secret"}, "body": b'{}'})()
+        response = type("Response", (), {"status_code": 200, "headers": {}, "content": b'{"id":"task-a"}'})()
+        api_audit._record("requests", request, response)
+        self.assertEqual("job-a", observed[0][0])
+        self.assertEqual("Bearer secret", observed[0][1].headers["Authorization"])
+        self.assertNotIn("Bearer secret", str(records))
+        with api_audit.suspend_api_audit():
+            api_audit._record("requests", request, response)
+        self.assertEqual(1, len(records))
+        self.assertEqual(1, len(observed))
 
     def test_records_original_request_and_response_bodies(self):
         records = []

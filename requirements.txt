@@ -4,3 +4,4 @@ PyJWT
 bcrypt
 bleach
 filelock
+cryptography>=41

@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import time
 from contextlib import closing
 
 
@@ -157,6 +158,42 @@ class HistoryStore:
         with closing(self._connect()) as connection:
             with connection:
                 connection.execute("DELETE FROM history WHERE prompt_id = ?", (prompt_id,))
+
+    def merge_api_recovery(self, task: dict, state: str, message: str, videos: list) -> bool:
+        """Add recovered output without claiming that downstream nodes completed."""
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    "SELECT owner_id,data FROM history WHERE prompt_id=?", (task["prompt_id"],)
+                ).fetchone()
+                if existing and existing[0] != task["owner_id"]:
+                    raise ValueError("Recovery history owner mismatch")
+                item = json.loads(existing[1]) if existing else {
+                    "prompt": json.loads(task["payload"])[:5], "outputs": {},
+                    "user_id": task["owner_id"],
+                    "status": {"status_str": "error", "completed": False, "messages": [
+                        ["execution_start", {"timestamp": int(task["submitted_at"] * 1000)}],
+                        ["execution_error", {"node_id": task["node_id"], "node_type": "APIRecovery",
+                         "exception_type": "WorkerInterrupted", "exception_message": "服务器中断，工作流未完整执行。",
+                         "timestamp": int(time.time() * 1000)}],
+                    ]},
+                }
+                if (item.get("status") or {}).get("status_str") == "success":
+                    return False
+                item.setdefault("api_recovery", {})[task["id"]] = {
+                    "provider": task["provider"], "task_id": task["task_id"],
+                    "node_id": task["node_id"], "state": state, "message": message,
+                }
+                output = {"text": [message]}
+                if videos:
+                    output["video"] = videos
+                item.setdefault("outputs", {})["api_recovery_" + task["id"]] = output
+                connection.execute("""
+                    INSERT INTO history(prompt_id,owner_id,data) VALUES(?,?,?)
+                    ON CONFLICT(prompt_id) DO UPDATE SET data=excluded.data
+                """, (task["prompt_id"], task["owner_id"], json.dumps(item, ensure_ascii=False)))
+        return True
 
     def delete_owner(self, owner_id: str) -> None:
         with closing(self._connect()) as connection:

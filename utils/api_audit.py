@@ -1,8 +1,10 @@
 import contextvars
 import hashlib
 import json
+import logging
 import threading
 import time
+from contextlib import contextmanager
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -31,6 +33,17 @@ _fallback_prompt_id = None
 _fallback_lock = threading.Lock()
 _recorder = None
 _installed = False
+_observer = None
+_suspended = contextvars.ContextVar("account_manager_audit_suspended", default=False)
+
+
+@contextmanager
+def suspend_api_audit():
+    token = _suspended.set(True)
+    try:
+        yield
+    finally:
+        _suspended.reset(token)
 
 MEDIA_CONTENT_TYPES = (
     "image/",
@@ -211,9 +224,17 @@ def _audit_body(value, headers=None) -> bytes | None:
 
 
 def _record(client, request, response=None, error: BaseException = None, *, stream=False) -> None:
+    if _suspended.get():
+        return
     prompt_id = current_job()
     if not prompt_id or _recorder is None:
         return
+    if _observer and response is not None and not stream:
+        try:
+            _observer(prompt_id, request, response)
+        except Exception:
+            # Audit and execution must continue even if a checkpoint cannot be saved.
+            logging.getLogger("ComfyUI-Account-Manager").error("API recovery checkpoint could not be saved")
     try:
         response_body = None
         # Reading .content consumes the raw stream used by COS and other downloaders.
@@ -257,9 +278,10 @@ def _fallback_request(method, url, kwargs):
     return request
 
 
-def install_api_audit(recorder) -> None:
-    global _installed, _recorder
+def install_api_audit(recorder, observer=None) -> None:
+    global _installed, _recorder, _observer
     _recorder = recorder
+    _observer = observer
     if _installed:
         return
 

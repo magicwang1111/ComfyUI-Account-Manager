@@ -6,11 +6,14 @@ import folder_paths
 from aiohttp import web
 
 from server import PromptServer, is_loopback
+from comfy_execution.utils import get_executing_context
 
 from .utils import *
 from .utils.api_audit import install_api_audit
 from .utils.frontend import create_jobs_middleware, install_origin_middleware
 from .utils.frontend_reload import install_frontend_reload
+from .utils.api_recovery import ApiRecoveryManager
+from .utils.history_store import HistoryStore
 
 instance = PromptServer.instance
 app = instance.app
@@ -84,6 +87,32 @@ jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
 )
 access_control.sync_comfy_users()
+
+api_recovery = None
+if scheduler:
+    api_recovery = ApiRecoveryManager(
+        scheduler, HistoryStore(HISTORY_FILE), internal_signer.secret,
+        folder_paths.get_output_directory(),
+        register_assets=access_control.register_recovered_assets,
+        notify=instance.queue_updated,
+    )
+
+    def observe_api_submission(prompt_id, request, response):
+        context = get_executing_context()
+        node_id = context.node_id if context and context.prompt_id == prompt_id else ""
+        api_recovery.observe(prompt_id, node_id, request, response)
+
+    install_api_audit(scheduler.record_api_call, observe_api_submission)
+
+    async def start_api_recovery(app):
+        api_recovery.start()
+
+    app.on_startup.append(start_api_recovery)
+
+    async def stop_api_recovery(app):
+        api_recovery.stop()
+
+    app.on_cleanup.append(stop_api_recovery)
 
 if scheduler:
     event_relay = EventRelay(instance, scheduler, internal_signer, INSTANCE_PORT)

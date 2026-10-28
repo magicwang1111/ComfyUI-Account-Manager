@@ -44,6 +44,7 @@ class AccessControl:
         self.instance_port = int(instance_port or 0)
         self.worker_resource_class = str(worker_resource_class or "default")
         self.cloud_archive = cloud_archive
+        self.asset_access = None
         self._worker_heartbeat = None
 
         self._current_user = contextvars.ContextVar("user_id", default=None)
@@ -619,6 +620,34 @@ class AccessControl:
                     )
             except Exception:
                 logger.exception("Failed to register persistent history asset %s", path)
+
+    def register_recovered_assets(self, assets, prompt_id: str, user_id: str) -> None:
+        if self.asset_access:
+            from app.assets.database.queries.records import get_record_by_path_or_none
+            from app.assets.services.ingest import register_executed_output
+            from app.database.db import create_session
+
+            with self.asset_access.scope(user_id, write=True):
+                for reference, path in assets:
+                    with create_session() as session:
+                        existing = get_record_by_path_or_none(session, path)
+                        asset_id = existing.id if existing else None
+                    if not asset_id:
+                        registered = register_executed_output(path, job_id=prompt_id)
+                        if not registered:
+                            raise RuntimeError("Recovered asset registration failed")
+                        asset_id = registered.id
+                    reference["id"] = asset_id
+        else:
+            self._register_history_assets(assets, prompt_id, user_id)
+            if any(not reference.get("id") for reference, _ in assets):
+                raise RuntimeError("Recovered asset registration failed")
+        for reference, path in assets:
+            if reference.get("id"):
+                self.scheduler.upsert_asset(
+                    reference["id"], user_id, prompt_id, self.instance_port,
+                    dict(reference, file_path=path),
+                )
 
     def _save_history_item(self, prompt_id: str) -> None:
         if not self.__history_store:

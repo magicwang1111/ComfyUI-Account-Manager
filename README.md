@@ -189,6 +189,31 @@ variable. Extension scripts and helper scripts revalidate their browser cache on
 reload. Only the refresh extension has a versioned URL, preserving other plugins'
 module identities and relative imports. A reverse proxy must honor these cache headers.
 
+When the connection drops, the page displays “服务器连接已断开，正在等待恢复”
+once and waits without refreshing. Reconnecting clears the notice and checks the
+frontend revision again. Load the updated script while the server is available
+before testing a shutdown; an already open page keeps its previously loaded code.
+
+## Interrupted API task recovery
+
+With the distributed queue enabled, successful asynchronous submissions made through
+the audited `requests`/`httpx` clients create encrypted recovery checkpoints. After a
+job becomes `worker_lost`, a single recovery worker queries the original task ID,
+saves returned videos under the owner's output directory, and adds them to that
+owner's history. It never resubmits generation or runs downstream workflow nodes;
+the history remains failed with an explicit recovery message.
+
+Supported protocols are Seedance Ark, Wan OPC/Vapeur, and Kling official/Vapeur video
+endpoints using bearer authentication. Other protocols, synchronous calls, and old
+submissions without checkpoints are not automatically recovered. Short-lived bearer
+tokens must still be valid; expired credentials or missing tasks require manual lookup.
+
+Network/download failures retry with backoff, stopping after 20 consecutive failures
+or seven days since submission. Keep the scheduler database, history database,
+internal signing secret, and shared output directory across restarts. The secret is
+needed to decrypt pending query credentials; terminal checkpoints discard credentials.
+Multiple workers must share these paths and support the recovery file lock.
+
 ## API Access
 
 Authenticated API calls can include either:
