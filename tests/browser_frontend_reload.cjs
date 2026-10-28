@@ -81,6 +81,8 @@ async function draftImages(page) {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
     try {
         const connection = await harness(browser);
+        assert.equal(await connection.page.evaluate(() =>
+            window.comfyAPI.app.app.extensionManager.setting.get('Comfy.Toast.DisableReconnectingToast')), true);
         const connectionBefore = connection.navigations();
         const waiting = connection.page.getByText('服务器连接已断开，正在等待恢复', { exact: true });
         for (let cycle = 0; cycle < 2; cycle++) {
@@ -97,8 +99,9 @@ async function draftImages(page) {
         connection.state.disconnected = true;
         await connection.sockets.at(-1).close({ code: 1001, reason: 'Test server shutdown' });
         await waiting.waitFor();
-        await connection.page.waitForTimeout(1500);
+        await connection.page.waitForTimeout(6000);
         assert.equal(await waiting.count(), 1);
+        assert.equal(await connection.page.getByText('Reconnecting', { exact: true }).count(), 0);
         assert.equal(await connection.page.getByText('自动刷新已暂停', { exact: true }).count(), 0);
         connection.state.disconnected = false;
         await waiting.waitFor({ state: 'hidden' });

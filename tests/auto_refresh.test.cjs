@@ -12,6 +12,7 @@ function harness() {
     };
     const app = {
         isGraphReady: true,
+        ui: { settings: { settingsValues: {} } },
         graphToPrompt: async () => ({ workflow: { nodes: [] } }),
         extensionManager: {
             workflow: { openWorkflows: [] },
@@ -98,7 +99,8 @@ test('disconnect shows one waiting notification and reconnect removes it', async
     h.events.get('reconnecting')();
     assert.equal(h.toasts.length, 1);
     assert.equal(h.toasts[0].summary, '服务器连接已断开，正在等待恢复');
-    assert.equal(h.app.extensionManager.setting.settings['Comfy.Toast.DisableReconnectingToast'], true);
+    assert.equal(h.app.ui.settings.settingsValues['Comfy.Toast.DisableReconnectingToast'], true);
+    assert.equal(h.app.extensionManager.setting.settings['Comfy.Toast.DisableReconnectingToast'], undefined);
     await h.events.get('reconnected')();
     assert.equal(h.toasts.length, 0);
     h.events.get('reconnecting')();

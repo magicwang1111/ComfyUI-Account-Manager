@@ -142,7 +142,7 @@ async function checkForUpdate() {
         }
         reloading = true;
         // Change only the in-memory preference; the saved setting returns after reload.
-        app.extensionManager.setting.settings["Comfy.Window.UnloadConfirmation"] = false;
+        app.ui.settings.settingsValues["Comfy.Window.UnloadConfirmation"] = false;
         window.location.reload();
     } finally {
         busy = false;
@@ -158,7 +158,7 @@ app.registerExtension({
     name: "ComfyUI.AccountManager.AutoRefresh",
     setup() {
         // Replace the built-in reconnect toast for this page only (do not save the setting).
-        app.extensionManager.setting.settings["Comfy.Toast.DisableReconnectingToast"] = true;
+        app.ui.settings.settingsValues["Comfy.Toast.DisableReconnectingToast"] = true;
         const onDisconnect = () => {
             if (!disconnected) {
                 connectionToast = {
