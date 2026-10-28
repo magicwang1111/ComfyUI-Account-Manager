@@ -8,6 +8,8 @@ let busy = false;
 let pending = false;
 let reloading = false;
 let paused = false;
+let disconnected = false;
+let connectionEpoch = 0;
 let retryTimer;
 
 function readStored(key) {
@@ -80,7 +82,7 @@ async function restoreWorkflows(info) {
 }
 
 async function checkForUpdate() {
-    if (reloading || paused) return;
+    if (reloading || paused || disconnected) return;
     if (busy) {
         pending = true;
         return;
@@ -91,6 +93,7 @@ async function checkForUpdate() {
         return;
     }
     busy = true;
+    const epoch = connectionEpoch;
     try {
         let info;
         try {
@@ -102,13 +105,16 @@ async function checkForUpdate() {
         } catch {
             return; // A stopped server or expired login must not trigger a reload.
         }
+        if (epoch !== connectionEpoch || disconnected) return;
         if (!/^\d+$/.test(info.revision) || !info.user_id) return;
         try {
             await restoreWorkflows(info);
         } catch (error) {
+            if (epoch !== connectionEpoch || disconnected) return;
             pauseRefresh("工作流恢复未完成，备份已保留。请先检查并保存当前工作流。", error);
             return;
         }
+        if (epoch !== connectionEpoch || disconnected) return;
         let seen;
         try {
             seen = readStored(SEEN_KEY);
@@ -125,9 +131,11 @@ async function checkForUpdate() {
         if (BigInt(info.revision) <= baseline) return;
         try {
             const backup = await snapshotWorkflows(info);
+            if (epoch !== connectionEpoch || disconnected) return;
             sessionStorage.setItem(BACKUP_KEY, JSON.stringify(backup));
             sessionStorage.setItem(SEEN_KEY, JSON.stringify({ revision: info.revision, user_id: info.user_id }));
         } catch (error) {
+            if (epoch !== connectionEpoch || disconnected) return;
             pauseRefresh("无法安全暂存工作流，请先保存后手动刷新。", error);
             return;
         }
@@ -148,7 +156,18 @@ async function checkForUpdate() {
 app.registerExtension({
     name: "ComfyUI.AccountManager.AutoRefresh",
     setup() {
-        api.addEventListener("reconnected", checkForUpdate);
+        // ComfyUI already displays connection status; do not add a save warning while offline.
+        const onDisconnect = () => {
+            disconnected = true;
+            connectionEpoch++;
+            clearTimeout(retryTimer);
+        };
+        api.addEventListener("reconnecting", onDisconnect);
+        window.addEventListener("offline", onDisconnect);
+        api.addEventListener("reconnected", () => {
+            disconnected = false;
+            return checkForUpdate();
+        });
         window.addEventListener("online", checkForUpdate);
         window.addEventListener("pageshow", checkForUpdate);
         document.addEventListener("visibilitychange", () => {
