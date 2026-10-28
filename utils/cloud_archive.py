@@ -894,8 +894,26 @@ def _validate_public_http_url(url: str) -> None:
         addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
     except socket.gaierror as error:
         raise ValueError(f"Unable to resolve artifact host: {error}") from error
-    for address in addresses:
-        ip = ipaddress.ip_address(address[4][0])
+    ips = [ipaddress.ip_address(address[4][0]) for address in addresses]
+    fake_network = ipaddress.ip_network("198.18.0.0/15")
+    if any(ip in fake_network for ip in ips):
+        # Proxy Fake-IP is a routing token. Validate the hostname's public DNS
+        # answer instead; never allow literal Fake-IP URLs or private answers.
+        try:
+            ipaddress.ip_address(parsed.hostname)
+            literal = True
+        except ValueError:
+            literal = False
+        proxied = urllib.request.getproxies().get(parsed.scheme) and not urllib.request.proxy_bypass(parsed.hostname)
+        if not literal and proxied and all(ip in fake_network or ip.is_global for ip in ips):
+            query = urllib.parse.urlencode({"name": parsed.hostname, "type": "A"})
+            with urllib.request.urlopen("https://dns.alidns.com/resolve?" + query, timeout=10) as response:
+                answer = json.loads(response.read(65536))
+            ips = [ipaddress.ip_address(record["data"]) for record in answer.get("Answer", [])
+                   if record.get("type") in (1, 28)] if answer.get("Status") == 0 else []
+            if not ips:
+                raise ValueError("Public DNS lookup returned no artifact address")
+    for ip in ips:
         if not ip.is_global:
             raise ValueError("Remote artifact URL resolves to a non-public address")
 

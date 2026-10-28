@@ -214,6 +214,10 @@ internal signing secret, and shared output directory across restarts. The secret
 needed to decrypt pending query credentials; terminal checkpoints discard credentials.
 Multiple workers must share these paths and support the recovery file lock.
 
+Recovery queries reuse the original API endpoint and system proxy routing. When a
+configured HTTP(S) proxy uses Fake-IP DNS, media address validation checks the
+hostname through AliDNS over HTTPS; private addresses remain blocked.
+
 ## API Access
 
 Authenticated API calls can include either:

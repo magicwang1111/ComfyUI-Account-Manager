@@ -183,7 +183,8 @@ class ApiRecoveryTests(unittest.TestCase):
         response.__enter__.return_value = response
         response.status_code = 200
         response.json.return_value = {"status": "running"}
-        with patch.object(recovery, "_validate_public_http_url"), patch.object(recovery.requests, "request", return_value=response) as request:
+        # A local proxy may resolve public API hosts to benchmark-range Fake-IP addresses.
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("198.18.0.83", 443))]), patch.object(recovery.requests, "request", return_value=response) as request:
             self.manager._query(row)
         args, kwargs = request.call_args
         self.assertEqual(("GET", "https://api.example/api/v3/contents/generations/tasks/task-1"), args)

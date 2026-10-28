@@ -17,7 +17,7 @@ from cryptography.fernet import Fernet
 from filelock import FileLock, Timeout
 
 from .api_audit import suspend_api_audit
-from .cloud_archive import download_remote, _validate_public_http_url
+from .cloud_archive import download_remote
 from .recovery_providers import submission, result
 
 
@@ -105,7 +105,8 @@ class ApiRecoveryManager:
                 logger.error("API result recovery iteration failed; retrying")
 
     def _query(self, row):
-        _validate_public_http_url(row["query_url"])
+        # This endpoint comes from the authenticated submission, not returned media.
+        # Use the original client's proxy/DNS routing; Fake-IP is not the API's address.
         authorization = self.cipher.decrypt(row["credentials"]).decode()
         with requests.request(
             row["query_method"], row["query_url"],
