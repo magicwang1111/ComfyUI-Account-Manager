@@ -1,7 +1,9 @@
 import importlib.util
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -115,6 +117,24 @@ class HistoryStoreTests(unittest.TestCase):
             ["1", "2"],
             list(self.store.query(owner_id="user-a", offset=1, max_items=2, for_jobs=True)),
         )
+
+    def test_legacy_recovery_is_readable_without_rewriting_or_deleting_history(self):
+        item = self.item("user-a", 1)
+        item["api_recovery"] = {"task": {"state": "pending"}}
+        item["status"] = {"status_str": "error", "messages": [
+            ["execution_start", {"timestamp": 123}],
+            ["execution_error", {"node_type": "APIRecovery", "exception_message": "Interrupted"}],
+        ]}
+        self.store.save("recovered", item, 10)
+        self.store.save("previous", self.item("user-a", 2), 10)
+        for rows in (self.store.load(10), self.store.query(), self.store.query(for_jobs=True)):
+            self.assertEqual({"recovered", "previous"}, set(rows))
+            recovered = rows["recovered"]
+            self.assertEqual([], recovered["status"]["messages"][1][1]["traceback"])
+            self.assertEqual(123, recovered["prompt"][3]["create_time"])
+        with closing(sqlite3.connect(self.database)) as db:
+            stored = db.execute("SELECT data FROM history WHERE prompt_id='recovered'").fetchone()[0]
+        self.assertNotIn('traceback', stored)
 
 
 if __name__ == "__main__":

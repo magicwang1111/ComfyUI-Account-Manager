@@ -5,6 +5,20 @@ import time
 from contextlib import closing
 
 
+def _repair_recovery_fields(item: dict) -> None:
+    # Earlier recovery records omitted fields required by the frontend Jobs schema.
+    if not item.get("api_recovery"):
+        return
+    for event, data in (item.get("status") or {}).get("messages", []):
+        if event == "execution_start" and data.get("timestamp") is not None:
+            if item["prompt"][3].get("create_time") is None:
+                item["prompt"][3]["create_time"] = data["timestamp"]
+        if event == "execution_error" and data.get("node_type") == "APIRecovery":
+            data.setdefault("traceback", [])
+            data.setdefault("current_inputs", {})
+            data.setdefault("current_outputs", [])
+
+
 class HistoryStore:
     """Persist completed ComfyUI history entries in a small SQLite database."""
 
@@ -55,6 +69,7 @@ class HistoryStore:
             item = json.loads(data)
             if not isinstance(item, dict):
                 continue
+            _repair_recovery_fields(item)
             item["user_id"] = owner_id
             history[prompt_id] = item
         return history
@@ -122,6 +137,7 @@ class HistoryStore:
         for current_prompt_id, current_owner_id, data in rows:
             item = json.loads(data)
             if isinstance(item, dict):
+                _repair_recovery_fields(item)
                 item["user_id"] = current_owner_id
                 result[current_prompt_id] = item
         return result
@@ -176,6 +192,7 @@ class HistoryStore:
                         ["execution_start", {"timestamp": int(task["submitted_at"] * 1000)}],
                         ["execution_error", {"node_id": task["node_id"], "node_type": "APIRecovery",
                          "exception_type": "WorkerInterrupted", "exception_message": "服务器中断，工作流未完整执行。",
+                         "traceback": [], "current_inputs": {}, "current_outputs": [],
                          "timestamp": int(time.time() * 1000)}],
                     ]},
                 }
@@ -189,6 +206,7 @@ class HistoryStore:
                 if videos:
                     output["video"] = videos
                 item.setdefault("outputs", {})["api_recovery_" + task["id"]] = output
+                _repair_recovery_fields(item)
                 connection.execute("""
                     INSERT INTO history(prompt_id,owner_id,data) VALUES(?,?,?)
                     ON CONFLICT(prompt_id) DO UPDATE SET data=excluded.data

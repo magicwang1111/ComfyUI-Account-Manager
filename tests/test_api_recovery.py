@@ -69,6 +69,8 @@ class ApiRecoveryTests(unittest.TestCase):
         visible = self.history.query(owner_id="user-a")["job-1"]
         self.assertEqual("error", visible["status"]["status_str"])
         self.assertFalse(visible["status"]["completed"])
+        self.assertEqual([], visible["status"]["messages"][1][1]["traceback"])
+        self.assertIsInstance(visible["prompt"][3]["create_time"], int)
         self.assertEqual({}, self.history.query(owner_id="user-b"))
         videos = [ref for output in visible["outputs"].values() for ref in output.get("video", [])]
         self.assertEqual(1, len(videos))
