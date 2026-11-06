@@ -23,6 +23,7 @@ class JWTAuth:
 
         self.expire_minutes = expire_minutes
         self.algorithm = algorithm
+        self.task_sessions = None
 
         self.__secret_key = secret_key
 
@@ -100,6 +101,10 @@ class JWTAuth:
                     request, "/logout", message="Unexpected error"
                 )
 
+            if "am_task" in user:
+                if self.task_sessions is None:
+                    raise web.HTTPUnauthorized(reason="Task sessions are unavailable")
+                await self.task_sessions.authorize(request, user)
             return await handler(request)
 
         async def handle_unauthorized_access(

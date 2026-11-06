@@ -14,6 +14,7 @@ from .utils.frontend import create_jobs_middleware, install_origin_middleware
 from .utils.frontend_reload import install_frontend_reload
 from .utils.api_recovery import ApiRecoveryManager
 from .utils.history_store import HistoryStore
+from .utils.task_sessions import TaskSessions
 
 instance = PromptServer.instance
 app = instance.app
@@ -86,6 +87,17 @@ access_control = AccessControl(
 jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
 )
+jwt_auth.task_sessions = TaskSessions(instance, users_db, jwt_auth, scheduler)
+
+
+def current_task_environment():
+    context = get_executing_context()
+    if context is None:
+        raise ValueError("当前不在 ComfyUI 任务执行上下文中。")
+    return jwt_auth.task_sessions.environment(context.prompt_id)
+
+
+instance.account_manager_task_environment = current_task_environment
 access_control.sync_comfy_users()
 
 api_recovery = None
