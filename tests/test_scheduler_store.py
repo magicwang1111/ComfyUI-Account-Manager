@@ -40,6 +40,27 @@ class SchedulerStoreTests(unittest.TestCase):
         self.assertFalse(is_sqlite_busy(sqlite3.OperationalError("disk I/O error")))
         self.assertFalse(is_sqlite_busy(RuntimeError("database is locked")))
 
+    def test_idle_workers_ignore_orphan_jobs_and_require_live_compatible_capacity(self):
+        self.store.register_worker(8180, 100, resource_class="api")
+        self.store.enqueue(queue_item(0, "orphan"), "old-user", 8180)
+        self.store.claim(8180, 100, resource_class="api")
+        # Reproduce a historical running row no longer owned by the live worker.
+        with closing(self.store._connect()) as connection:
+            connection.execute("UPDATE scheduler_workers SET active_prompt_id = NULL WHERE port = 8180")
+            connection.commit()
+        self.store.register_worker(8181, 101, resource_class="api")
+        self.store.enqueue(queue_item(1, "active"), "current-user", 8181)
+        self.store.claim(8181, 101, resource_class="api")
+        self.store.register_worker(8182, 102, resource_class="gpu")
+        self.store.register_worker(8183, 103, resource_class="api")
+        self.store.register_worker(8184, 104, resource_class="default")
+        with closing(self.store._connect()) as connection:
+            connection.execute("UPDATE scheduler_workers SET last_heartbeat = 0 WHERE port = 8183")
+            connection.commit()
+        self.assertEqual([8180, 8184], self.store.idle_worker_ports("api"))
+        self.assertEqual("running", self.store.get_job("orphan")["status"])
+        self.assertEqual([8182, 8184], self.store.idle_worker_ports("gpu"))
+
     def test_claims_are_unique_across_thirty_workers(self):
         for index in range(30):
             self.store.enqueue(queue_item(index, f"job-{index}"), f"user-{index}", 8180)

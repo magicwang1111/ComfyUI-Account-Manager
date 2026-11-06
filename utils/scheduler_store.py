@@ -855,6 +855,25 @@ class SchedulerStore:
             ).fetchall()
         return [int(row["port"]) for row in rows]
 
+    def idle_worker_ports(self, resource_class: str, stale_seconds: int = 60) -> list[int]:
+        cutoff = time.time() - max(1, int(stale_seconds))
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT worker.port
+                FROM scheduler_workers AS worker
+                LEFT JOIN scheduler_jobs AS active
+                  ON active.prompt_id = worker.active_prompt_id AND active.status = ?
+                WHERE worker.last_heartbeat >= ?
+                  AND active.prompt_id IS NULL
+                  AND (worker.resource_class = 'default' OR ? = 'default'
+                       OR worker.resource_class = ?)
+                ORDER BY worker.port
+                """,
+                (RUNNING, cutoff, resource_class, resource_class),
+            ).fetchall()
+        return [int(row["port"]) for row in rows]
+
     def upsert_asset(
         self,
         asset_id: str,

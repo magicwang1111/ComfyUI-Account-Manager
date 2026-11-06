@@ -29,6 +29,7 @@ class TaskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.scheduler = Mock(
             get_job=lambda pid: {"owner_id": pid.split("-")[0], "status": "running"},
             worker_ports=lambda: [8180, 8181],
+            idle_worker_ports=lambda resource: [8181],
             classify_item=lambda item: "api",
             resource_concurrency_limits={"api": 2}, max_concurrent_jobs_per_user=2,
             running_jobs=lambda owner=None, **kw: [{"resource_class": "api", "worker_port": 8180}],
@@ -79,9 +80,13 @@ class TaskSessionTests(unittest.IsolatedAsyncioTestCase):
                                           {"am_task": "alice-job", "id": "alice"})
 
     async def test_all_workers_busy_rejects_child_instead_of_waiting(self):
-        self.scheduler.running_jobs = lambda owner=None, **kw: (
-            [{"worker_port": 8180}, {"worker_port": 8181}] if kw.get("admin") else [{"resource_class": "api"}]
-        )
+        self.scheduler.idle_worker_ports = lambda resource: []
+        request = SimpleNamespace(method="POST", path="/prompt", json=AsyncMock(return_value={"prompt": {}}))
+        with self.assertRaises(web.HTTPConflict):
+            await self.sessions.authorize(request, {"am_task": "alice-job", "id": "alice"})
+
+    async def test_parent_port_cannot_count_as_available_child_worker(self):
+        self.scheduler.idle_worker_ports = lambda resource: [8183]
         request = SimpleNamespace(method="POST", path="/prompt", json=AsyncMock(return_value={"prompt": {}}))
         with self.assertRaises(web.HTTPConflict):
             await self.sessions.authorize(request, {"am_task": "alice-job", "id": "alice"})

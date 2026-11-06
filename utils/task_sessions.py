@@ -70,6 +70,5 @@ class TaskSessions:
         active = self.scheduler.running_jobs(owner)
         if limit and sum(job["resource_class"] == resource for job in active) >= limit:
             raise web.HTTPConflict(reason="Account concurrency is full; parent Agent is waiting for a video child task")
-        busy_ports = {job["worker_port"] for job in self.scheduler.running_jobs(admin=True)}
-        if not set(self.scheduler.worker_ports()) - busy_ports:
+        if not set(self.scheduler.idle_worker_ports(resource)) - {self.server.port}:
             raise web.HTTPConflict(reason="No free scheduler worker for the video child task")
