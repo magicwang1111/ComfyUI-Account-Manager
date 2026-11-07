@@ -15,6 +15,8 @@ from .utils.frontend_reload import install_frontend_reload
 from .utils.api_recovery import ApiRecoveryManager
 from .utils.history_store import HistoryStore
 from .utils.task_sessions import TaskSessions
+from .utils.agent_tasks import AgentTaskStore
+from .utils.agent_task_routes import AgentTaskRoutes
 
 instance = PromptServer.instance
 app = instance.app
@@ -98,6 +100,25 @@ def current_task_environment():
 
 
 instance.account_manager_task_environment = current_task_environment
+if scheduler:
+    agent_store = AgentTaskStore(
+        os.path.join(os.path.dirname(__file__), config.get('agent_tasks_db', 'agent_tasks.sqlite3')),
+        concurrency=config.get('agent_concurrency', 4),
+        per_user=config.get('agent_concurrency_per_user', 2),
+        pending_per_user=config.get('agent_pending_per_user', 20),
+    )
+    agent_routes = AgentTaskRoutes(agent_store, jwt_auth.task_sessions, internal_signer, scheduler, instance,
+                                  HistoryStore(HISTORY_FILE))
+    agent_routes.install(routes)
+    jwt_auth.agent_tasks = agent_routes
+
+    def submit_agent_task(node_id, job):
+        context = get_executing_context()
+        if context is None:
+            raise ValueError('独立 Agent 提交需要已认证的执行上下文。')
+        return agent_routes.create_from_node(context.prompt_id, node_id, job)
+
+    instance.account_manager_submit_agent = submit_agent_task
 access_control.sync_comfy_users()
 
 api_recovery = None

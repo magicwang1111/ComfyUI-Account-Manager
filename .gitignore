@@ -9,6 +9,7 @@ blacklist.txt
 secret_key.txt
 history.sqlite3*
 scheduler.sqlite3*
+agent_tasks.sqlite3*
 scheduler_secret.txt
 *.lock
 cloud_staging/
